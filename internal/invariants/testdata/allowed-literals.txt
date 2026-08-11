@@ -1,0 +1,15 @@
+# String literals that contain a bank entry name but are not provider
+# knowledge. Matched against the WHOLE literal, case-insensitively — never a
+# substring, so exempting one URL cannot accidentally exempt a family of them.
+#
+# Adding a line here weakens TestNoBankEntryKnowledgeInSource, which is why it
+# is a file and not a rule embedded in the test: it makes weakening the check a
+# visible diff that a reviewer can object to.
+#
+# Before adding anything, be sure the literal is genuinely incidental. If the
+# CLI is branching on it, formatting it into a path, or looking it up, that is
+# the coupling this test exists to catch and the fix is to move the knowledge
+# into the bank.
+
+https://github.com/lpezet/secure-agent-lab
+https://github.com/lpezet/secure-agent-lab-cli

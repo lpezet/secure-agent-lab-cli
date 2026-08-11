@@ -1,0 +1,97 @@
+# GoReleaser builds every platform from one runner and publishes the checksums
+# and signatures that make `curl … | bash` defensible.
+#
+# The install script is a look, and reviewers will say so. The mitigations are
+# all here and all cheap: a checksum file, a signature over it, and an install
+# script short enough that clone-and-inspect is a real alternative rather than a
+# footnote.
+version: 2
+
+project_name: sal
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: sal
+    main: ./cmd/sal
+    binary: sal
+    env:
+      # A static binary. The install script drops one file on PATH, and it must
+      # not acquire a libc dependency on the way.
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/lpezet/secure-agent-lab-cli/internal/version.version={{ .Version }}
+      - -X github.com/lpezet/secure-agent-lab-cli/internal/version.commit={{ .FullCommit }}
+    goos:
+      # No windows target on purpose. sal drives `docker compose` and reads a
+      # loopback-published port on the host; on Windows the supported path is
+      # WSL, which is the linux build.
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Keyless signing over the checksum file. Verifying one signature covers every
+# artifact, since the checksums file covers them.
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    signature: "${artifact}.sig"
+    args:
+      - sign-blob
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+changelog:
+  # sal is tagged on its own line, separate from the stack. Its changelog
+  # describes CLI changes and must never be mistaken for a boundary change.
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  prerelease: auto
+  footer: |
+    ## Verify
+
+    ```
+    cosign verify-blob checksums.txt \
+      --signature checksums.txt.sig \
+      --certificate checksums.txt.pem \
+      --certificate-identity-regexp 'https://github.com/lpezet/secure-agent-lab-cli/.*' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    sha256sum -c checksums.txt --ignore-missing
+    ```
+
+    This pins the **binary**, not the lab. The stack release a project runs is
+    pinned per-project and moved by `sal upgrade`.

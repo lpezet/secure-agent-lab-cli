@@ -1,0 +1,7 @@
+bin/
+dist/
+
+# Never commit anything shaped like a credential, even by accident.
+*.pem
+*.key
+.env

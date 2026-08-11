@@ -1,0 +1,17 @@
+# Bank entry names, as of stack v1.9.0.
+#
+# The list this test checks against. It lives in testdata because naming a real
+# bank entry is legitimate in a fixture and nowhere else in this repo — see
+# TestNoBankEntryKnowledgeInSource.
+#
+# Refresh with:  ls ../secure-agent-lab/bank | grep -v '^README\|^schema'
+#
+# Known limit, worth stating rather than discovering: this is a snapshot, so it
+# catches per-provider code written for an entry that exists today. Code written
+# for an entry added later goes unnoticed until this file is refreshed. Wiring
+# the refresh into CI against the pinned stack tag would close that gap.
+
+anthropic
+cloudflare
+gcp
+github
