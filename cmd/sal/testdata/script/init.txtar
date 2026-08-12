@@ -1,29 +1,32 @@
 # `sal init` creates two trees: a committable pointer in the project, and the
 # deployment somewhere the agent cannot see.
 #
-# Driven with --offline throughout. init normally resolves the tag to a commit,
-# which is a network call, and a test suite that reaches the internet is a test
-# suite that fails for reasons unrelated to the code.
+# Driven with --stack-dir throughout, pointed at the fixture checkout. That is
+# the same flag an air-gapped machine would use, and it means no test reaches
+# the network — a suite that does fails for reasons unrelated to the code.
 
 cd project
 
-exec sal init --offline
+exec sal init --stack-dir $FIXTURES/local-stack
 stdout '^lab\s+project-[0-9a-f]{8}$'
 stdout '^at\s+.*[/\\]labs[/\\]project-[0-9a-f]{8}$'
 stdout '^stack\s+v1\.9\.0'
 stdout '^project\s+'
 
+# The stack's own proxy addons are installed, not just bank entries. Without
+# 000_policy.py the proxy forwards to the broker, and the lab can walk around
+# the cred-gateway whitelist entirely.
+stdout '^addon\s+000_policy\.py$'
+stdout '^addon\s+001_allowlist\.py$'
+
 # The default release is stated, never silent.
 stderr 'pinning to stack v1\.9\.0'
 stderr '--stack'
 
-# Offline means the tag went unverified, and it says so rather than recording a
-# commit it never confirmed.
+# Reading a local checkout means the release went unverified, so no commit is
+# recorded rather than one being invented.
 stderr 'unverified and no commit is recorded'
-
-# It tells you what to do next, including that the first up is slow.
 stderr 'sal providers add'
-stderr 'takes a few minutes'
 
 # The project keeps only a pointer — no absolute paths, so it can be committed.
 exists .sal/lab.json
@@ -35,42 +38,48 @@ grep '"name": "project-' .sal/lab.json
 # would be an answer to "what is installed" that nothing keeps true.
 ! exists .sal/installed.json
 
-# The lab is now resolvable, and reports the release with no commit recorded.
 exec sal version
 stdout '^stack\s+v1\.9\.0$'
-stdout '^lab\s+.*[/\\]labs[/\\]project-'
 
-# A virgin lab has no providers, and that is not an error.
+# A virgin lab has no PROVIDERS, even though it has addons — the two are
+# recorded separately, because a stack addon is not a bank entry and
+# check-drift.sh reads `installed` to decide which entries a deployment claims.
 exec sal providers list
 ! stdout .
 stderr 'no providers installed'
 
 # Running init twice is refused rather than silently rebuilding a deployment
 # that may already have credentials wired into it.
-! exec sal init --offline
+! exec sal init --stack-dir $FIXTURES/local-stack
 stderr 'already has a lab'
 
-# A second project gets its own lab. One stack per project is the whole point:
-# sharing would put two projects behind one proxy, one audit trail and one set
-# of injected credentials.
+# A second project gets its own lab, at a release it names itself.
 cd $WORK/other
-exec sal init --offline --stack v1.8.0
+exec sal init --stack-dir $FIXTURES/local-stack --stack v1.8.0
 stdout '^lab\s+other-[0-9a-f]{8}$'
 stdout '^stack\s+v1\.8\.0'
 ! stderr 'pinning to stack'
 
 # Names derive from the path, so two projects with the same basename do not
-# collide.
-cd $WORK/nested/project
-exec sal init --offline
-stdout '^lab\s+project-[0-9a-f]{8}$'
-
-# ...and it warns, because a lab nested inside another project's tree is
+# collide — and a lab nested inside another project's tree warns, because it is
 # usually a mistake even though it is allowed.
+cd $WORK/nested/project
+exec sal init --stack-dir $FIXTURES/local-stack
+stdout '^lab\s+project-[0-9a-f]{8}$'
 stderr 'nested inside one tree'
+
+# A checkout with no addons directory REFUSES rather than creating a lab whose
+# proxy would forward to the broker. "Created but not safe yet" is not a state
+# worth being able to reach.
+cd $WORK/no-addons-project
+! exec sal init --stack-dir $WORK/hollow-stack
+stderr 'no barrier between the lab container and the broker'
+! exists .sal/lab.json
 
 -- project/.keep --
 -- other/.keep --
+-- no-addons-project/.keep --
+-- hollow-stack/bank/.keep --
 -- nested/.sal/lab.json --
 {"name": "outer-lab", "stack_tag": "v1.9.0"}
 -- nested/project/.keep --

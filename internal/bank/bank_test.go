@@ -25,14 +25,12 @@ const (
 
 // fakeStack serves what the stack repo's hosting serves: a tag→commit lookup
 // and a source tarball per commit. The tarball is built from the real fixture
-// bank, so these tests exercise the whole path — resolve, download, extract,
-// cache, enumerate, decode a manifest — against content that is also what the
-// rest of the suite uses.
+// bank, so these tests exercise the whole path against content the rest of the
+// suite also uses.
 type fakeStack struct {
 	t *testing.T
 
 	mu        sync.Mutex
-	head      string // what the tag currently points at
 	resolves  int
 	downloads int
 
@@ -41,20 +39,19 @@ type fakeStack struct {
 
 func newFakeStack(t *testing.T) *fakeStack {
 	t.Helper()
-	f := &fakeStack{t: t, head: shaA}
+	f := &fakeStack{t: t}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.resolves++
-		sha := f.head
 		f.mu.Unlock()
 
-		if !strings.HasSuffix(r.URL.Path, "/v1.9.0") && !strings.HasSuffix(r.URL.Path, "/v2.0.0") {
+		if !strings.HasSuffix(r.URL.Path, "/v1.9.0") {
 			http.NotFound(w, r)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"sha": sha})
+		_ = json.NewEncoder(w).Encode(map[string]string{"sha": shaA})
 	})
 	mux.HandleFunc("/lpezet/", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -70,14 +67,14 @@ func newFakeStack(t *testing.T) *fakeStack {
 	return f
 }
 
-func (f *fakeStack) source() *Source {
-	return &Source{
+func (f *fakeStack) options() Options {
+	return Options{Source: &Source{
 		Owner:        "lpezet",
 		Repo:         "secure-agent-lab",
 		APIBase:      f.server.URL,
 		CodeloadBase: f.server.URL,
 		Client:       f.server.Client(),
-	}
+	}}
 }
 
 func (f *fakeStack) counts() (resolves, downloads int) {
@@ -86,17 +83,11 @@ func (f *fakeStack) counts() (resolves, downloads int) {
 	return f.resolves, f.downloads
 }
 
-func (f *fakeStack) moveTag(sha string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.head = sha
-}
-
 // fixtureTarball packs tests/fixtures/bank into the shape a source tarball
 // takes: everything under one wrapper directory named for the ref.
 func fixtureTarball(t *testing.T, ref string) []byte {
 	t.Helper()
-	root := filepath.Join("..", "..", "tests", "fixtures", "bank")
+	root := filepath.Join("..", "..", "tests", "fixtures", "local-stack", "bank")
 
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
@@ -118,11 +109,13 @@ func fixtureTarball(t *testing.T, ref string) []byte {
 	}
 
 	writeHeader(wrapper+"/", tar.TypeDir, 0)
-	// A file outside the subtree, so every test proves it is dropped.
+	// A file outside every subtree, so each test proves it is dropped.
 	writeFile(wrapper+"/README.md", "stack readme")
-	// And the one the real bank carries, which is inside the subtree and is
-	// therefore kept — but is still not an entry.
-	writeFile(wrapper+"/"+subtree+"/README.md", "bank readme")
+	writeFile(wrapper+"/"+BankSubtree+"/README.md", "bank readme")
+	// A second subtree, so a test can prove the two do not extract over each
+	// other.
+	writeFile(wrapper+"/"+AddonsSubtree+"/000_policy.py", "policy addon")
+	writeFile(wrapper+"/"+AddonsSubtree+"/001_allowlist.py", "allowlist addon")
 
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -135,7 +128,7 @@ func fixtureTarball(t *testing.T, ref string) []byte {
 		if rel == "." {
 			return nil
 		}
-		name := wrapper + "/" + subtree + "/" + filepath.ToSlash(rel)
+		name := wrapper + "/" + BankSubtree + "/" + filepath.ToSlash(rel)
 		if d.IsDir() {
 			writeHeader(name+"/", tar.TypeDir, 0)
 			return nil
@@ -144,9 +137,8 @@ func fixtureTarball(t *testing.T, ref string) []byte {
 		if err != nil {
 			return err
 		}
-		writeHeader(name, tar.TypeReg, int64(len(body)))
-		_, err = tw.Write(body)
-		return err
+		writeFile(name, string(body))
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -161,39 +153,20 @@ func fixtureTarball(t *testing.T, ref string) []byte {
 	return buf.Bytes()
 }
 
-func openBank(t *testing.T, f *fakeStack, cacheDir, tag string, mutate func(*Options)) (*Bank, error) {
-	t.Helper()
-	opts := Options{CacheDir: cacheDir, Source: f.source()}
-	if mutate != nil {
-		mutate(&opts)
-	}
-	return Open(context.Background(), tag, opts)
-}
-
 func TestOpenFetchesAndEnumerates(t *testing.T) {
 	f := newFakeStack(t)
-	cache := t.TempDir()
 
-	b, err := openBank(t, f, cache, "v1.9.0", nil)
+	b, tree, err := Open(context.Background(), shaA, f.options())
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if b.Tag() != "v1.9.0" {
-		t.Errorf("Tag() = %q", b.Tag())
-	}
-	// The commit, not just the tag. A tag is a mutable pointer; this is what
-	// was actually installed.
-	if b.Commit() != shaA {
-		t.Errorf("Commit() = %q, want %q", b.Commit(), shaA)
-	}
+	defer tree.Close()
 
 	names, err := b.List()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"acme", "widget"}
-	if fmt.Sprint(names) != fmt.Sprint(want) {
+	if want := "[acme widget]"; fmt.Sprint(names) != want {
 		t.Errorf("List() = %v, want %v", names, want)
 	}
 
@@ -201,176 +174,165 @@ func TestOpenFetchesAndEnumerates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Name != "acme" {
-		t.Errorf("manifest name = %q", m.Name)
-	}
 	if err := m.CheckSchemaVersion(); err != nil {
 		t.Errorf("fetched manifest should pass its checks: %v", err)
+	}
+
+	// Fetching by commit means no tag was resolved. The caller already knew
+	// which tree it wanted, which is the whole reason a cache could go.
+	if resolves, downloads := f.counts(); resolves != 0 || downloads != 1 {
+		t.Errorf("%d resolves and %d downloads; want 0 and 1", resolves, downloads)
 	}
 }
 
 // An entry is a directory containing a manifest. That rule is what lets a new
-// provider need no code here, and it is also what keeps schema/ and README.md
-// out of the listing without either being named.
+// provider need no code here, and it keeps README.md and schema/ out of the
+// listing without naming either.
 func TestListRecognisesEntriesStructurally(t *testing.T) {
 	f := newFakeStack(t)
-	b, err := openBank(t, f, t.TempDir(), "v1.9.0", nil)
+	b, tree, err := Open(context.Background(), shaA, f.options())
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tree.Close()
 
-	// The tarball carries bank/README.md; it is not an entry.
 	if _, err := os.Stat(filepath.Join(b.Dir(), "README.md")); err != nil {
 		t.Fatalf("fixture setup: bank/README.md should be present: %v", err)
 	}
-	for _, name := range mustList(t, b) {
-		if name == "README.md" {
-			t.Error("a file was listed as an entry")
-		}
-	}
-
-	// A directory without a manifest is not an entry either.
 	if err := os.MkdirAll(filepath.Join(b.Dir(), "schema"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(b.Dir(), "schema", "provider.schema.json"), []byte("{}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range mustList(t, b) {
-		if name == "schema" {
-			t.Error("a directory with no manifest was listed as an entry")
-		}
-	}
-}
 
-func mustList(t *testing.T, b *Bank) []string {
-	t.Helper()
 	names, err := b.List()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return names
-}
-
-func TestSecondOpenUsesTheCache(t *testing.T) {
-	f := newFakeStack(t)
-	cache := t.TempDir()
-
-	if _, err := openBank(t, f, cache, "v1.9.0", nil); err != nil {
-		t.Fatal(err)
-	}
-	r1, d1 := f.counts()
-	if r1 != 1 || d1 != 1 {
-		t.Fatalf("first open: %d resolves, %d downloads; want 1 and 1", r1, d1)
-	}
-
-	if _, err := openBank(t, f, cache, "v1.9.0", nil); err != nil {
-		t.Fatal(err)
-	}
-	r2, d2 := f.counts()
-	if r2 != r1 || d2 != d1 {
-		t.Errorf("second open hit the network: %d resolves, %d downloads", r2, d2)
-	}
-}
-
-// The reason the cache is keyed by commit rather than by tag.
-//
-// A tag-keyed cache serves the old tree forever once a tag moves, and
-// `sal upgrade` would report success having changed nothing.
-func TestMovedTagIsOnlyNoticedOnRefresh(t *testing.T) {
-	f := newFakeStack(t)
-	cache := t.TempDir()
-
-	if _, err := openBank(t, f, cache, "v1.9.0", nil); err != nil {
-		t.Fatal(err)
-	}
-	f.moveTag(shaB)
-
-	// Without --refresh the cached pointer stands, and no request is made.
-	b, err := openBank(t, f, cache, "v1.9.0", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if b.Commit() != shaA {
-		t.Errorf("cached commit = %q, want the original %q", b.Commit(), shaA)
-	}
-
-	// With it, the pointer is re-resolved and the new tree fetched.
-	b, err = openBank(t, f, cache, "v1.9.0", func(o *Options) { o.Refresh = true })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if b.Commit() != shaB {
-		t.Errorf("refreshed commit = %q, want %q", b.Commit(), shaB)
-	}
-
-	// Both trees remain cached, because a commit is immutable and the old one
-	// may still be what some other lab is pinned to.
-	for _, sha := range []string{shaA, shaB} {
-		if _, err := os.Stat(filepath.Join(cache, commitsDir, sha)); err != nil {
-			t.Errorf("commit %s should still be cached: %v", short(sha), err)
+	for _, name := range names {
+		if name == "README.md" || name == "schema" {
+			t.Errorf("%q is not an entry but was listed", name)
 		}
 	}
 }
 
-func TestOfflineUsesCacheAndOtherwiseSaysSo(t *testing.T) {
+// One commit supplies more than one subtree, and each must come back holding
+// only its own content.
+func TestSubtreesOfOneCommitStaySeparate(t *testing.T) {
 	f := newFakeStack(t)
-	cache := t.TempDir()
+	ctx := context.Background()
 
-	if _, err := openBank(t, f, cache, "v1.9.0", nil); err != nil {
+	bankTree, err := FetchTree(ctx, shaA, BankSubtree, f.options())
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	before, _ := f.counts()
-	b, err := openBank(t, f, cache, "v1.9.0", func(o *Options) { o.Offline = true })
+	defer bankTree.Close()
+	addons, err := FetchTree(ctx, shaA, AddonsSubtree, f.options())
 	if err != nil {
-		t.Fatalf("a cached tag should work offline: %v", err)
+		t.Fatal(err)
 	}
-	if b.Commit() != shaA {
-		t.Errorf("Commit() = %q", b.Commit())
+	defer addons.Close()
+
+	if bankTree.Dir == addons.Dir {
+		t.Fatalf("both subtrees extracted to %s", bankTree.Dir)
 	}
-	if after, _ := f.counts(); after != before {
-		t.Error("offline made a request")
+	if _, err := os.Stat(filepath.Join(bankTree.Dir, "acme", "provider.json")); err != nil {
+		t.Errorf("bank subtree is missing its entries: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(addons.Dir, "000_policy.py")); err != nil {
+		t.Errorf("addons subtree is missing the policy addon: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(addons.Dir, "acme")); err == nil {
+		t.Error("the bank leaked into the addons subtree")
+	}
+}
+
+// Nothing is kept between commands, so Close must actually remove what was
+// extracted — otherwise "no cache" only means an unmanaged one in /tmp.
+func TestCloseRemovesTheExtractedTree(t *testing.T) {
+	f := newFakeStack(t)
+
+	tree, err := FetchTree(context.Background(), shaA, BankSubtree, f.options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := tree.Dir
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := tree.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Errorf("%s survived Close", dir)
+	}
+}
+
+// A local checkout is read in place, and Close must not delete it — that
+// directory belongs to whoever passed --stack-dir.
+func TestStackDirIsReadInPlaceAndNeverDeleted(t *testing.T) {
+	f := newFakeStack(t)
+	local := filepath.Join("..", "..", "tests", "fixtures", "local-stack")
+
+	opts := f.options()
+	opts.StackDir = local
+
+	tree, err := FetchTree(context.Background(), "", BankSubtree, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tree.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(local, BankSubtree)); err != nil {
+		t.Fatalf("Close deleted the caller's checkout: %v", err)
 	}
 
-	// An uncached tag fails immediately and says why, rather than hanging.
-	_, err = openBank(t, f, cache, "v2.0.0", func(o *Options) { o.Offline = true })
-	if err == nil {
-		t.Fatal("want an error for an uncached tag while offline")
+	// And nothing reached the network at all.
+	if resolves, downloads := f.counts(); resolves != 0 || downloads != 0 {
+		t.Errorf("a local checkout made %d resolves and %d downloads", resolves, downloads)
 	}
-	if !strings.Contains(err.Error(), "offline") {
-		t.Errorf("error should mention offline, got: %v", err)
+}
+
+func TestStackDirWithoutTheSubtree(t *testing.T) {
+	opts := Options{StackDir: t.TempDir()}
+	if _, err := FetchTree(context.Background(), "", BankSubtree, opts); err == nil {
+		t.Fatal("want an error naming the missing subtree")
 	}
 }
 
 func TestResolveRejectsRefsThatAreNotReleaseTags(t *testing.T) {
 	f := newFakeStack(t)
-	src := f.source()
+	src := f.options().Source
 
 	// These would otherwise be interpolated straight into a request path.
-	for _, bad := range []string{
-		"main",
-		"../../etc/passwd",
-		"v1.9.0/../../other",
-		"v1.9.0?foo=bar",
-		"",
-		"latest",
-	} {
+	for _, bad := range []string{"main", "../../etc/passwd", "v1.9.0/../../other", "v1.9.0?foo=bar", "", "latest"} {
 		if _, err := src.ResolveTag(context.Background(), bad); err == nil {
 			t.Errorf("ResolveTag(%q) should be refused", bad)
 		}
 	}
-	if before, _ := f.counts(); before != 0 {
+	if resolves, _ := f.counts(); resolves != 0 {
 		t.Error("a rejected ref still reached the network")
+	}
+}
+
+func TestFetchRejectsRefsThatAreNotCommits(t *testing.T) {
+	f := newFakeStack(t)
+	// A tag must never be interpolated here: fetches are by commit precisely
+	// so a moved tag cannot change what an existing lab reads.
+	for _, bad := range []string{"v1.9.0", "main", "../../etc", "", shaA[:8]} {
+		if _, err := FetchTree(context.Background(), bad, BankSubtree, f.options()); err == nil {
+			t.Errorf("FetchTree(%q) should be refused", bad)
+		}
 	}
 }
 
 func TestEntryDirRejectsNamesThatEscape(t *testing.T) {
 	f := newFakeStack(t)
-	b, err := openBank(t, f, t.TempDir(), "v1.9.0", nil)
+	b, tree, err := Open(context.Background(), shaA, f.options())
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tree.Close()
+
 	for _, bad := range []string{"../../etc", "..", "Acme", "acme/../..", "/etc"} {
 		if got, err := b.EntryDir(bad); err == nil {
 			t.Errorf("EntryDir(%q) = %q, want refusal", bad, got)
@@ -381,40 +343,39 @@ func TestEntryDirRejectsNamesThatEscape(t *testing.T) {
 	}
 }
 
-// A failed extraction must leave no directory that a later run mistakes for a
-// complete one.
-func TestInterruptedFetchLeavesNoUsableCacheEntry(t *testing.T) {
-	cache := t.TempDir()
-	truncated := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/repos/") {
-			_ = json.NewEncoder(w).Encode(map[string]string{"sha": shaA})
-			return
-		}
-		w.Header().Set("Content-Type", "application/gzip")
+// A failed extraction must leave nothing behind in the system temp directory.
+func TestFailedFetchLeavesNoTemporaryDirectory(t *testing.T) {
+	corrupt := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("this is not a gzip stream"))
 	}))
-	defer truncated.Close()
+	defer corrupt.Close()
 
-	src := &Source{
+	before := countSalTempDirs(t)
+
+	opts := Options{Source: &Source{
 		Owner: "lpezet", Repo: "secure-agent-lab",
-		APIBase: truncated.URL, CodeloadBase: truncated.URL, Client: truncated.Client(),
-	}
-	_, err := Open(context.Background(), "v1.9.0", Options{CacheDir: cache, Source: src})
-	if err == nil {
+		APIBase: corrupt.URL, CodeloadBase: corrupt.URL, Client: corrupt.Client(),
+	}}
+	if _, err := FetchTree(context.Background(), shaB, BankSubtree, opts); err == nil {
 		t.Fatal("want an error for a corrupt archive")
 	}
-	if _, statErr := os.Stat(filepath.Join(cache, commitsDir, shaA)); statErr == nil {
-		t.Error("a failed fetch left a cache directory behind")
-	}
 
-	// And no scratch directories are left lying around either.
-	items, err := os.ReadDir(cache)
+	if after := countSalTempDirs(t); after != before {
+		t.Errorf("temp directories went from %d to %d; a failed fetch left one behind", before, after)
+	}
+}
+
+func countSalTempDirs(t *testing.T) int {
+	t.Helper()
+	items, err := os.ReadDir(os.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	n := 0
 	for _, it := range items {
-		if strings.HasPrefix(it.Name(), ".partial-") {
-			t.Errorf("scratch directory %s was not cleaned up", it.Name())
+		if it.IsDir() && strings.HasPrefix(it.Name(), "sal-stack-") {
+			n++
 		}
 	}
+	return n
 }

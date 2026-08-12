@@ -36,15 +36,16 @@ cd ..
 stderr 'no lab for this directory'
 stderr '--stack'
 
-# With a release named and nothing cached, --offline fails immediately and says
-# why, rather than hanging on a connection it was told not to make.
-! exec sal providers list --available --stack v1.9.0 --offline
-stderr 'not cached|offline'
+# A local checkout with no bank in it fails immediately and names what is
+# missing, rather than reaching for the network it was told not to use.
+! exec sal providers list --available --stack v1.9.0 --stack-dir $WORK/empty-stack
+stderr 'has no bank directory'
 
 # A malformed release tag is refused before any request is attempted.
-! exec sal providers list --available --stack main --offline
-! exec sal providers list --available --stack ../../etc --offline
+! exec sal providers list --available --stack main --stack-dir $WORK/empty-stack
+! exec sal providers list --available --stack ../../etc --stack-dir $WORK/empty-stack
 
+-- empty-stack/.keep --
 -- empty-project/.sal/lab.json --
 {"name": "empty-lab", "stack_tag": "v1.9.0"}
 -- stocked-project/.sal/lab.json --

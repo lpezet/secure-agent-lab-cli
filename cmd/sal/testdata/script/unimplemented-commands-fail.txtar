@@ -18,9 +18,6 @@ stderr 'not implemented yet'
 ! exec sal drift
 stderr 'not implemented yet'
 
-! exec sal providers add acme
-stderr 'not implemented yet'
-
 ! exec sal providers create acme
 stderr 'not implemented yet'
 
@@ -56,5 +53,5 @@ stderr 'not implemented yet'
 
 # The error names the full command path, so a failure in a script says which
 # invocation it came from.
-! exec sal providers add acme
-stderr 'sal providers add'
+! exec sal providers create acme
+stderr 'sal providers create'

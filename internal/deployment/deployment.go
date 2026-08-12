@@ -43,6 +43,14 @@ type Record struct {
 
 	// Installed lists every bank entry installed here.
 	Installed []Entry `json:"installed"`
+
+	// BaseAddons are the proxy addons that come from the stack itself rather
+	// than from the bank, and that every deployment needs regardless of which
+	// providers it has. Recorded separately because they are not bank entries:
+	// check-drift.sh reads `installed` to decide which entries a deployment
+	// claims, and listing a stack addon there would have it look for a bank
+	// entry that does not exist.
+	BaseAddons []string `json:"base_addons,omitempty"`
 }
 
 // Entry records one installed bank entry: what it was, where its files went,

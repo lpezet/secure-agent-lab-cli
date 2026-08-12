@@ -21,7 +21,14 @@ bank/<name>/
   lab/setup.sh                   optional fragment
 ```
 
-## `bank/` — entries that must install cleanly
+## `local-stack/` — a stand-in for a checkout of the stack repo
+
+Laid out the way the stack repo is, so `--stack-dir` can be pointed at it:
+`bank/` holds the entries, `stack/proxy/addons/` holds the proxy addons every
+deployment gets at `sal init`. That flag replaced an `--offline` flag and a
+cache; a directory you can read is a better test seam than hidden state.
+
+### `local-stack/bank/` — entries that must install cleanly
 
 | Entry | What it covers |
 |---|---|
@@ -42,6 +49,7 @@ through the same path a real install takes.
 | `unknown-field` | Carries `audit_mode`, a field this build has never heard of. It looks exactly like a control, which is the point — `additionalProperties: false` is what stops an installer quietly ignoring it. |
 | `missing-exposed` | A route that does not say whether it is exposed. Absent must not read as "not whitelisted, fine". |
 | `stack-too-new` | `min_stack` above any plausible deployment. The failure this catches is silent at install and fatal at runtime. |
+| `host-mismatch` | Declares a host its addon never quotes. The credential is then never injected and nothing errors — the request goes out bare, or the vendor rejects it much later and somewhere else. |
 | `leaky-conf` | A manifest marking `/leaky/token` as `exposed: false`, and a cred-gateway config that whitelists it anyway. Not a manifest error — a whole-entry one, and the only fixture here that a JSON check alone will never catch. |
 
 `leaky-conf` is the fixture worth keeping longest. Exposing a token route hands

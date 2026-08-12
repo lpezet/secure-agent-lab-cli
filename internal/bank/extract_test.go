@@ -76,7 +76,7 @@ func makeTarGz(t *testing.T, entries []tarEntry) []byte {
 func extract(t *testing.T, entries []tarEntry, lim Limits) (dest string, files int, err error) {
 	t.Helper()
 	dest = t.TempDir()
-	files, err = extractSubtree(bytes.NewReader(makeTarGz(t, entries)), subtree, dest, lim)
+	files, err = extractSubtree(bytes.NewReader(makeTarGz(t, entries)), BankSubtree, dest, lim)
 	return dest, files, err
 }
 

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "ghost",
+  "summary": "Declares a host its addon never matches",
+  "min_stack": "1.9.0",
+  "load_band": "provider",
+  "hosts": ["api.ghost.example", "uploads.ghost.example"],
+  "broker_routes": [
+    { "path": "/ghost/token", "exposed": false }
+  ]
+}

@@ -1,0 +1,154 @@
+# `sal providers add`, driven --dry-run so every check runs without needing a
+# terminal to prompt on, and --stack-dir so nothing reaches the network.
+#
+# The stack content is a plain directory laid out below. Before the cache was
+# removed this had to be hand-seeded into commits/<40-hex>/<subtree-slug>/,
+# which pinned an internal layout as a test contract for no benefit.
+
+cd project
+
+# The plan is printed before anything is written, and states the two things a
+# reader most needs: which slot the addon got, and which routes the lab will be
+# able to reach.
+exec sal providers add acme --dry-run --stack-dir $WORK/stack
+stdout 'slot\s+010 \(provider band\)'
+stdout 'hosts\s+api\.acme\.example, uploads\.acme\.example'
+stdout 'write\s+broker/acme\.js'
+stdout 'write\s+proxy/010_acme\.py'
+stdout 'write\s+cred-gateway/acme\.conf'
+stdout 'route\s+/acme/token — not exposed to the lab'
+stdout 'route\s+/acme/credential — whitelisted for the lab'
+stderr 'nothing was written'
+
+# A dry run writes nothing, including the record.
+grep '"installed": \[\]' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
+
+# THE control. Every field of this manifest is valid; the failure lives between
+# the manifest and the config file beside it, so only comparing the two finds
+# it.
+! exec sal providers add leaky --dry-run --stack-dir $WORK/stack
+stderr '/leaky/token'
+stderr 'exposed:false'
+stderr 'reusable credential'
+
+# A host the manifest declares but the addon never matches: the credential is
+# simply never injected, and nothing errors at runtime.
+! exec sal providers add ghost --dry-run --stack-dir $WORK/stack
+stderr 'uploads\.ghost\.example'
+stderr 'never injected'
+
+# A manifest from a generation this build does not understand is refused, not
+# attempted — it may declare a control that would be silently skipped.
+! exec sal providers add futuristic --dry-run --stack-dir $WORK/stack
+stderr 'schema_version 99'
+
+# An entry needing a newer stack than the lab runs is refused BEFORE any file
+# is written, because that failure is otherwise silent until runtime.
+! exec sal providers add demanding --dry-run --stack-dir $WORK/stack
+stderr 'needs stack v9\.9\.9'
+stderr 'fail inside the container later'
+
+# An entry the bank does not carry.
+! exec sal providers add nosuchthing --dry-run --stack-dir $WORK/stack
+stderr 'no entry named "nosuchthing"'
+
+# Already installed is a refusal rather than a silent reinstall, which could
+# renumber an addon and change proxy load order underneath a running lab.
+cd $WORK/stocked
+! exec sal providers add acme --dry-run --stack-dir $WORK/stack
+stderr 'already installed'
+stderr 'remove it first'
+
+-- project/.sal/lab.json --
+{"name": "demo-lab", "stack_tag": "v1.9.0"}
+-- stocked/.sal/lab.json --
+{"name": "stocked-lab", "stack_tag": "v1.9.0"}
+-- .config/secure-agent-lab/labs/demo-lab/compose.yaml --
+name: demo-lab
+-- .config/secure-agent-lab/labs/demo-lab/.sal/installed.json --
+{"stack_tag": "v1.9.0", "installed": []}
+-- .config/secure-agent-lab/labs/stocked-lab/compose.yaml --
+name: stocked-lab
+-- .config/secure-agent-lab/labs/stocked-lab/.sal/installed.json --
+{
+  "stack_tag": "v1.9.0",
+  "installed": [{"name": "acme", "slot": 10, "schema_version": 1, "files": ["proxy/010_acme.py"]}]
+}
+-- stack/bank/acme/provider.json --
+{
+  "schema_version": 1,
+  "name": "acme",
+  "summary": "Fixture entry with a secret, a config value and one unexposed route",
+  "min_stack": "1.7.0",
+  "load_band": "provider",
+  "hosts": ["api.acme.example", "uploads.acme.example"],
+  "secrets": [
+    {"env": "ACME_KEY_PATH", "file": "acme.pem", "prompt": "Acme key", "multiline": true}
+  ],
+  "config": [
+    {"env": "ACME_REGION", "prompt": "Region", "default": "us-east-1"}
+  ],
+  "broker_routes": [
+    {"path": "/acme/token", "exposed": false},
+    {"path": "/acme/credential", "exposed": true}
+  ],
+  "lab_env": {"ACME_CREDENTIAL_URL": "http://cred-gateway/acme/credential"}
+}
+-- stack/bank/acme/broker/acme.js --
+module.exports = function register(app) {};
+-- stack/bank/acme/proxy/acme.py --
+HOSTS = ("api.acme.example", "uploads.acme.example")
+-- stack/bank/acme/cred-gateway/acme.conf --
+location = /acme/credential { proxy_pass http://broker:8080; }
+-- stack/bank/leaky/provider.json --
+{
+  "schema_version": 1,
+  "name": "leaky",
+  "summary": "Whitelists a route its own manifest marks unexposed",
+  "min_stack": "1.7.0",
+  "load_band": "provider",
+  "hosts": ["api.leaky.example"],
+  "broker_routes": [
+    {"path": "/leaky/token", "exposed": false},
+    {"path": "/leaky/credential", "exposed": true}
+  ]
+}
+-- stack/bank/leaky/proxy/leaky.py --
+HOSTS = ("api.leaky.example",)
+-- stack/bank/leaky/cred-gateway/leaky.conf --
+location = /leaky/credential { proxy_pass http://broker:8080; }
+location = /leaky/token { proxy_pass http://broker:8080; }
+-- stack/bank/ghost/provider.json --
+{
+  "schema_version": 1,
+  "name": "ghost",
+  "summary": "Declares a host its addon never matches",
+  "min_stack": "1.7.0",
+  "load_band": "provider",
+  "hosts": ["api.ghost.example", "uploads.ghost.example"],
+  "broker_routes": [{"path": "/ghost/token", "exposed": false}]
+}
+-- stack/bank/ghost/proxy/ghost.py --
+HOSTS = ("api.ghost.example",)
+-- stack/bank/futuristic/provider.json --
+{
+  "schema_version": 99,
+  "name": "futuristic",
+  "summary": "From a generation this build does not understand",
+  "min_stack": "1.7.0",
+  "load_band": "provider",
+  "hosts": ["api.futuristic.example"],
+  "broker_routes": [{"path": "/futuristic/token", "exposed": false}]
+}
+-- stack/bank/demanding/provider.json --
+{
+  "schema_version": 1,
+  "name": "demanding",
+  "summary": "Needs an image far newer than this lab runs",
+  "min_stack": "9.9.9",
+  "load_band": "provider",
+  "hosts": ["api.demanding.example"],
+  "broker_routes": [{"path": "/demanding/token", "exposed": false}]
+}
+-- stack/stack/proxy/addons/000_policy.py --
+_INTERNAL_HOSTS = {"broker", "cred-gateway"}
