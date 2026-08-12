@@ -21,3 +21,10 @@ https://github.com/lpezet/secure-agent-lab-cli
 https://api.github.com
 https://codeload.github.com
 application/vnd.github+json
+
+# The git source each service in a generated compose file builds from. Same
+# reasoning: it names where the stack is published, not anything about a
+# provider. Note that the RENDERED output is checked separately by
+# internal/compose's TestNoProviderNamesInOutput, which this file cannot cover
+# because the AST walk never reads a template.
+https://github.com/lpezet/secure-agent-lab.git

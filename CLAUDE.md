@@ -144,10 +144,10 @@ helper** — each is wrong at either of the others' severity:
 | deployment's tag below `sal`'s declared minimum | this CLI | **warn** (contract item 3) |
 
 **Record what was installed in `.sal/installed.json`** in the deployment — name,
-assigned `NNN`, files written. `check-drift.sh` in the stack repo already looks
-for it and degrades to filename-guessing without it. Record the **resolved
-commit SHA** alongside the stack tag it was fetched from: a tag is mutable, so
-the tag alone does not say what was actually installed.
+assigned `NNN`, files written — and the **resolved commit SHA** alongside the
+stack tag: a tag is mutable, so the tag alone does not say what was actually
+installed. Where the deployment lives, and why the record stays inside it, is
+under Non-obvious invariants below.
 
 ## Non-obvious invariants
 
@@ -181,6 +181,53 @@ structurally impossible rather than something tracked in a lockfile, and the
 loopback-only binding survives untouched. Keep the `127.0.0.1` prefix: observer
 publishes the audit trail over plain HTTP with no auth, and it is only safe
 because it is not reachable off the host.
+
+**The deployment lives outside the project.** Two trees:
+
+```
+<project>/.sal/lab.json                     committable pointer: name + stack tag
+~/.config/secure-agent-lab/labs/<name>/     the deployment itself, 0700
+```
+
+This is a boundary property, not tidiness. The agent works in the project, so a
+deployment kept there is one the agent can edit — and proxy addons, broker
+providers and gateway configs are exactly what it would want to edit. The
+dev-container example needs a read-only shadow mount over its own
+`.devcontainer` for precisely this reason. Out of the workspace they are not
+merely unwritable but invisible, and the shadow mount disappears from the
+generated compose because there is nothing left to shadow.
+
+`<name>` is `<basename>-<8 hex of the project's absolute path>`. The suffix is
+load-bearing: two projects called `api` must not resolve to one lab, because
+sharing would put both behind a single proxy, a single audit trail and a single
+set of injected credentials.
+
+**The install record stays in the deployment**, at
+`<lab>/.sal/installed.json` — `scripts/check-drift.sh` reads
+`"$DEPLOY/.sal/installed.json"` and degrades silently to filename-guessing
+without it. The nesting looks redundant inside a directory `sal` owns, and it
+stays because it makes the lab an *ordinary* deployment that a tool which has
+never heard of `sal` still works on. The project's `.sal/` holds `lab.json` and
+must never hold an `installed.json`: two answers to "what is installed" and
+nothing keeping them equal.
+
+**Per-provider values never appear in the generated compose.** Every manifest
+declares its own `secrets`, `config` and `lab_env`, so those become entries in
+`.env` (broker and proxy) and `lab.env` (the lab only, so it never receives the
+broker's environment), written by `providers add`. This is not only tidiness:
+the AST invariant test reads `.go` files, so a provider name in a template would
+sail straight past it. `internal/compose`'s `TestNoProviderNamesInOutput` checks
+the rendered output for exactly that.
+
+⚠️ **The compose template in `internal/compose/templates/` is a reference
+implementation living here temporarily.** It describes the stack's wiring, which
+is the boundary's business — so a change to the service graph currently needs a
+`sal` release, which is the coupling the split exists to prevent. The intended
+end state is the stack repo carrying it and `sal` fetching it at the pinned tag,
+the way it already fetches the bank. Keep it in one file and keep it dumb, so
+moving it is a copy. Note also that `stack/` in the stack repo is **not** that
+template: `stack/broker/` is the broker's source, while a deployment's `broker/`
+is the providers it loads. Same name, opposite roles.
 
 **Cache the bank by commit, never by tag.** A tag is a mutable pointer, so a
 tag-keyed cache serves the tree it first saw forever — and the failure is

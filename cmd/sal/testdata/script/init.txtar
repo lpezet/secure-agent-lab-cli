@@ -1,0 +1,78 @@
+# `sal init` creates two trees: a committable pointer in the project, and the
+# deployment somewhere the agent cannot see.
+#
+# Driven with --offline throughout. init normally resolves the tag to a commit,
+# which is a network call, and a test suite that reaches the internet is a test
+# suite that fails for reasons unrelated to the code.
+
+cd project
+
+exec sal init --offline
+stdout '^lab\s+project-[0-9a-f]{8}$'
+stdout '^at\s+.*[/\\]labs[/\\]project-[0-9a-f]{8}$'
+stdout '^stack\s+v1\.9\.0'
+stdout '^project\s+'
+
+# The default release is stated, never silent.
+stderr 'pinning to stack v1\.9\.0'
+stderr '--stack'
+
+# Offline means the tag went unverified, and it says so rather than recording a
+# commit it never confirmed.
+stderr 'unverified and no commit is recorded'
+
+# It tells you what to do next, including that the first up is slow.
+stderr 'sal providers add'
+stderr 'takes a few minutes'
+
+# The project keeps only a pointer — no absolute paths, so it can be committed.
+exists .sal/lab.json
+grep '"stack_tag": "v1.9.0"' .sal/lab.json
+grep '"name": "project-' .sal/lab.json
+! grep '/' .sal/lab.json
+
+# And no install record: that belongs to the deployment, and a second copy here
+# would be an answer to "what is installed" that nothing keeps true.
+! exists .sal/installed.json
+
+# The lab is now resolvable, and reports the release with no commit recorded.
+exec sal version
+stdout '^stack\s+v1\.9\.0$'
+stdout '^lab\s+.*[/\\]labs[/\\]project-'
+
+# A virgin lab has no providers, and that is not an error.
+exec sal providers list
+! stdout .
+stderr 'no providers installed'
+
+# Running init twice is refused rather than silently rebuilding a deployment
+# that may already have credentials wired into it.
+! exec sal init --offline
+stderr 'already has a lab'
+
+# A second project gets its own lab. One stack per project is the whole point:
+# sharing would put two projects behind one proxy, one audit trail and one set
+# of injected credentials.
+cd $WORK/other
+exec sal init --offline --stack v1.8.0
+stdout '^lab\s+other-[0-9a-f]{8}$'
+stdout '^stack\s+v1\.8\.0'
+! stderr 'pinning to stack'
+
+# Names derive from the path, so two projects with the same basename do not
+# collide.
+cd $WORK/nested/project
+exec sal init --offline
+stdout '^lab\s+project-[0-9a-f]{8}$'
+
+# ...and it warns, because a lab nested inside another project's tree is
+# usually a mistake even though it is allowed.
+stderr 'nested inside one tree'
+
+-- project/.keep --
+-- other/.keep --
+-- nested/.sal/lab.json --
+{"name": "outer-lab", "stack_tag": "v1.9.0"}
+-- nested/project/.keep --
+-- .config/secure-agent-lab/labs/outer-lab/compose.yaml --
+name: outer-lab

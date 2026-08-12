@@ -1,9 +1,14 @@
-// Package deployment reads what a lab directory says about itself.
+// Package deployment reads and writes a deployment's install record.
 //
-// The record lives at .sal/installed.json inside the deployment. It is not
-// bookkeeping for this CLI's convenience: check-drift.sh in the stack repo
-// looks for the same file and degrades to guessing installed providers from
-// filenames without it.
+// The record lives at <deployment>/.sal/installed.json. That path is not
+// sal's to choose: scripts/check-drift.sh in the stack repo reads
+// "$DEPLOY/.sal/installed.json" and, finding nothing, degrades quietly to
+// guessing installed entries from filenames. The nesting looks redundant
+// inside a directory sal owns, and the reason it stays is that it makes the
+// deployment an ORDINARY one — identical in shape to a hand-rolled deployment
+// from examples/, so a tool that has never heard of sal still works on it.
+//
+// Finding which deployment belongs to a project is internal/lab's job.
 package deployment
 
 import (
@@ -13,30 +18,30 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
+	"time"
 )
 
-// Dir is the per-deployment state directory, relative to the lab root.
-const Dir = ".sal"
+// Dir is the record's directory inside a deployment, RecordFile the record.
+const (
+	Dir        = ".sal"
+	RecordFile = "installed.json"
+)
 
-// RecordFile is the install record inside Dir.
-const RecordFile = "installed.json"
-
-// ErrNotALab is returned when a directory is not, and is not inside, a lab.
-var ErrNotALab = errors.New("not a secure-agent-lab deployment (no " + Dir + "/" + RecordFile + " here or above)")
+// ErrNoRecord means the directory holds no install record.
+var ErrNoRecord = errors.New("deployment has no " + Dir + "/" + RecordFile)
 
 // Record is the contents of .sal/installed.json.
 type Record struct {
-	// StackTag is the stack release this deployment is pinned to, in tag
-	// spelling.
+	// StackTag is the release this deployment is pinned to, in tag spelling.
 	StackTag string `json:"stack_tag"`
 
-	// StackCommit is the commit that tag resolved to when the bank was
-	// fetched. A tag is mutable, so the tag alone does not say what was
-	// actually installed — without this, "pinned to v1.9.0" is a claim about
-	// intent rather than a record of fact.
+	// StackCommit is what that tag resolved to when the deployment was
+	// rendered. A tag is mutable, so the tag alone records an intention;
+	// this records what was actually used.
 	StackCommit string `json:"stack_commit,omitempty"`
 
-	// Installed lists every bank entry installed into this deployment.
+	// Installed lists every bank entry installed here.
 	Installed []Entry `json:"installed"`
 }
 
@@ -54,59 +59,66 @@ type Entry struct {
 	// recorded rather than re-derived later.
 	SchemaVersion int `json:"schema_version"`
 
-	// Files are the paths written, relative to the lab root, so that an
-	// uninstall removes exactly what an install added.
+	// Files are the paths written, relative to the deployment, so an uninstall
+	// removes exactly what the install added.
 	Files []string `json:"files"`
 
 	// StackTag is the release the entry's files came from, which may be older
-	// than the deployment's current pin if it has not been upgraded since.
+	// than the deployment's pin if it has not been upgraded since.
 	StackTag string `json:"stack_tag,omitempty"`
+
+	InstalledAt time.Time `json:"installed_at,omitempty"`
 }
 
-// Find walks up from start looking for a lab root. Returns the lab root
-// directory and its record.
-func Find(start string) (root string, rec *Record, err error) {
-	dir, err := filepath.Abs(start)
-	if err != nil {
-		return "", nil, err
-	}
-	for {
-		path := filepath.Join(dir, Dir, RecordFile)
-		if _, statErr := os.Stat(path); statErr == nil {
-			rec, err := load(path)
-			if err != nil {
-				return "", nil, err
-			}
-			return dir, rec, nil
-		} else if !errors.Is(statErr, fs.ErrNotExist) {
-			return "", nil, statErr
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", nil, ErrNotALab
-		}
-		dir = parent
-	}
+// Path returns the record's path within a deployment directory.
+func Path(deployDir string) string {
+	return filepath.Join(deployDir, Dir, RecordFile)
 }
 
-func load(path string) (*Record, error) {
-	b, err := os.ReadFile(path)
+// Load reads the record for a deployment directory.
+func Load(deployDir string) (*Record, error) {
+	b, err := os.ReadFile(Path(deployDir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, ErrNoRecord
+	}
 	if err != nil {
 		return nil, err
 	}
 	var rec Record
 	if err := json.Unmarshal(b, &rec); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, fmt.Errorf("%s: %w", Path(deployDir), err)
 	}
 	return &rec, nil
 }
 
-// UsedSlots returns the addon slots already taken in this deployment, so the
-// installer can assign the lowest free one in a band.
+// Save writes the record, creating .sal/ if needed.
+func Save(deployDir string, rec *Record) error {
+	if err := os.MkdirAll(filepath.Join(deployDir, Dir), 0o700); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(Path(deployDir), append(b, '\n'), 0o600)
+}
+
+// UsedSlots returns the addon slots already taken, so the installer can assign
+// the lowest free one in a band.
 func (r *Record) UsedSlots() map[int]string {
 	used := make(map[int]string, len(r.Installed))
 	for _, e := range r.Installed {
 		used[e.Slot] = e.Name
 	}
 	return used
+}
+
+// Names returns the installed entry names, sorted.
+func (r *Record) Names() []string {
+	names := make([]string, 0, len(r.Installed))
+	for _, e := range r.Installed {
+		names = append(names, e.Name)
+	}
+	sort.Strings(names)
+	return names
 }

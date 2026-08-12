@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/lpezet/secure-agent-lab-cli/internal/deployment"
+	"github.com/lpezet/secure-agent-lab-cli/internal/lab"
 	"github.com/lpezet/secure-agent-lab-cli/internal/stackver"
 	"github.com/lpezet/secure-agent-lab-cli/internal/version"
 )
@@ -100,26 +102,49 @@ func runVersion(cmd *cobra.Command) error {
 	}
 	fmt.Fprintf(out, "sal          %s\n", self)
 
-	root, rec, err := deployment.Find(".")
+	l, ptr, err := lab.Find(cwd())
 	switch {
-	case errors.Is(err, deployment.ErrNotALab):
-		fmt.Fprintf(out, "stack        unknown — this directory is not a lab\n")
+	case errors.Is(err, lab.ErrNoLab):
+		fmt.Fprintf(out, "stack        unknown — this directory has no lab\n")
 		return nil
 	case err != nil:
 		return err
 	}
 
-	tag := rec.StackTag
+	// Two records name a version, and they answer different questions. The
+	// deployment's installed.json says what was actually rendered; the
+	// project's lab.json is committable and may have arrived from a teammate
+	// or a branch. The deployment wins, and a disagreement is worth saying
+	// out loud rather than resolving silently.
+	tag, commit := ptr.StackTag, ""
+	rec, recErr := deployment.Load(l.Dir)
+	if recErr == nil && rec.StackTag != "" {
+		tag = rec.StackTag
+		commit = rec.StackCommit
+	}
 	if tag == "" {
 		tag = "unrecorded"
 	}
-	fmt.Fprintf(out, "stack        %s", tag)
-	if rec.StackCommit != "" {
-		fmt.Fprintf(out, " (%s)", rec.StackCommit)
-	}
-	fmt.Fprintf(out, "\nlab          %s\n", root)
 
-	warnIfStackTooOld(cmd, rec.StackTag)
+	fmt.Fprintf(out, "stack        %s", tag)
+	if commit != "" {
+		fmt.Fprintf(out, " (%s)", commit)
+	}
+	fmt.Fprintf(out, "\nproject      %s\n", l.ProjectDir)
+	fmt.Fprintf(out, "lab          %s\n", l.Dir)
+
+	errOut := cmd.ErrOrStderr()
+	if !l.Exists() {
+		fmt.Fprintf(errOut, "\nwarning: %s names lab %q, but no deployment exists there.\n"+
+			"         Run `sal init` to create it, or delete %s to forget it.\n",
+			filepath.Join(l.ProjectDir, lab.PointerDir, lab.PointerFile), l.Name, lab.PointerDir)
+	} else if recErr == nil && ptr.StackTag != "" && rec.StackTag != "" && ptr.StackTag != rec.StackTag {
+		fmt.Fprintf(errOut, "\nwarning: this project asks for stack %s but its lab was built from %s.\n"+
+			"         Run `sal upgrade` to bring the lab to what the project asks for.\n",
+			ptr.StackTag, rec.StackTag)
+	}
+
+	warnIfStackTooOld(cmd, tag)
 	return nil
 }
 

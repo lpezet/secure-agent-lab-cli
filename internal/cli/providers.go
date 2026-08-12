@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lpezet/secure-agent-lab-cli/internal/deployment"
+	"github.com/lpezet/secure-agent-lab-cli/internal/lab"
 	"github.com/lpezet/secure-agent-lab-cli/internal/manifest"
 )
 
@@ -55,13 +56,17 @@ func newProvidersListCmd() *cobra.Command {
 }
 
 func runProvidersInstalled(cmd *cobra.Command) error {
-	root, rec, err := deployment.Find(cwd())
+	l, _, err := lab.Find(cwd())
+	if err != nil {
+		return err
+	}
+	rec, err := deployment.Load(l.Dir)
 	if err != nil {
 		return err
 	}
 
 	if len(rec.Installed) == 0 {
-		fmt.Fprintf(cmd.ErrOrStderr(), "no providers installed in %s\n", root)
+		fmt.Fprintf(cmd.ErrOrStderr(), "no providers installed in %s\n", l.Dir)
 		return nil
 	}
 

@@ -1,26 +1,51 @@
-# Inside a lab, both versions print, and the commit is shown alongside the tag.
+# Inside a project with a lab, both versions print, and the commit is shown
+# alongside the tag.
 #
-# The commit is not decoration: a tag is mutable, so the tag alone records
-# intent rather than what was actually installed.
+# The commit is not decoration: a tag is mutable, so the tag alone records what
+# was asked for rather than what was built.
+
+cd project
 
 exec sal version
 stdout '^sal\s+'
 stdout '^stack\s+v1\.9\.0 \(3ef8552aa\)'
-stdout '^lab\s+'
+stdout '^project\s+'
+stdout '^lab\s+.*[/\\]labs[/\\]demo-lab'
 ! stderr 'warning'
 
-# The lab root is found by walking up, so the command works from anywhere
-# inside the project rather than only at its root.
+# The pointer is found by walking up, so the command works from anywhere inside
+# the project rather than only at its root.
 cd sub/deeper
 exec sal version
 stdout '^stack\s+v1\.9\.0'
 
--- .sal/installed.json --
+# A pointer naming a lab that does not exist is a real state — a clone of a
+# repo whose lab was never created here — and it says so rather than crashing.
+cd $WORK/orphan
+exec sal version
+stdout '^stack\s+v1\.9\.0'
+stderr 'names lab "missing-lab", but no deployment exists there'
+stderr 'sal init'
+
+# The deployment's record wins over the project's pointer when they disagree,
+# because it says what was actually built. The disagreement is reported.
+cd $WORK/disagreeing
+exec sal version
+stdout '^stack\s+v1\.9\.0'
+stderr 'project asks for stack v2\.0\.0 but its lab was built from v1\.9\.0'
+
+-- project/.sal/lab.json --
+{"name": "demo-lab", "stack_tag": "v1.9.0"}
+-- project/sub/deeper/.keep --
+-- orphan/.sal/lab.json --
+{"name": "missing-lab", "stack_tag": "v1.9.0"}
+-- disagreeing/.sal/lab.json --
+{"name": "demo-lab", "stack_tag": "v2.0.0"}
+-- .config/secure-agent-lab/labs/demo-lab/compose.yaml --
+name: demo-lab
+-- .config/secure-agent-lab/labs/demo-lab/.sal/installed.json --
 {
   "stack_tag": "v1.9.0",
   "stack_commit": "3ef8552aa",
-  "installed": [
-    {"name": "acme", "slot": 10, "schema_version": 1, "files": ["proxy/010_acme.py"]}
-  ]
+  "installed": []
 }
--- sub/deeper/.keep --

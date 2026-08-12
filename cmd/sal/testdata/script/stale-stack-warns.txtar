@@ -6,6 +6,8 @@
 # lab it can still mostly manage; refuse nothing anywhere and a manifest it
 # cannot understand gets installed anyway.
 
+cd project
+
 exec sal version
 stdout '^stack\s+v1\.5\.0'
 
@@ -14,8 +16,9 @@ stderr 'warning: this lab is pinned to v1\.5\.0'
 stderr 'below the v1\.9\.0 that sal expects'
 stderr 'schema_version'
 
--- .sal/installed.json --
-{
-  "stack_tag": "v1.5.0",
-  "installed": []
-}
+-- project/.sal/lab.json --
+{"name": "old-lab", "stack_tag": "v1.5.0"}
+-- .config/secure-agent-lab/labs/old-lab/compose.yaml --
+name: old-lab
+-- .config/secure-agent-lab/labs/old-lab/.sal/installed.json --
+{"stack_tag": "v1.5.0", "installed": []}

@@ -1,24 +1,25 @@
-# `sal providers list` reads .sal/installed.json rather than guessing from
-# filenames, and `--available` reads the bank at the release this lab is
-# pinned to.
+# `sal providers list` reads the deployment's .sal/installed.json rather than
+# guessing from filenames, and `--available` reads the bank at the release the
+# lab was built from.
 #
 # Nothing here touches the network: the paths that would are driven with
 # --offline, which is itself the thing being asserted.
 
-# Outside a lab there is nothing to list, and the error says what is missing
-# rather than printing an empty table.
+# Outside a project with a lab there is nothing to list, and the error says
+# what is missing rather than printing an empty table.
 ! exec sal providers list
-stderr 'not a secure-agent-lab deployment'
+stderr 'no lab for this directory'
+stderr 'sal init'
 
-cd lab
+cd empty-project
 
-# An empty lab is not an error — it is a lab with nothing installed yet. The
-# message goes to stderr so that piping stdout yields an empty list, not prose.
+# A lab with nothing installed is not an error. The message goes to stderr so
+# that piping stdout yields an empty list, not prose.
 exec sal providers list
 ! stdout .
 stderr 'no providers installed'
 
-cd ../lab-with-providers
+cd ../stocked-project
 
 exec sal providers list
 stdout 'NAME\s+SLOT\s+SCHEMA\s+FROM'
@@ -28,11 +29,11 @@ stdout 'NAME\s+SLOT\s+SCHEMA\s+FROM'
 stdout 'acme\s+010\s+1\s+v1\.9\.0'
 stdout 'widget\s+011\s+1\s+v1\.9\.0'
 
-# --available needs to know which release to read the bank at. Outside a lab
-# that is unanswerable, and the error says how to answer it.
+# --available needs to know which release to read the bank at. With no lab that
+# is unanswerable, and the error says how to answer it.
 cd ..
 ! exec sal providers list --available
-stderr 'not a secure-agent-lab deployment'
+stderr 'no lab for this directory'
 stderr '--stack'
 
 # With a release named and nothing cached, --offline fails immediately and says
@@ -44,13 +45,17 @@ stderr 'not cached|offline'
 ! exec sal providers list --available --stack main --offline
 ! exec sal providers list --available --stack ../../etc --offline
 
--- lab/.sal/installed.json --
-{
-  "stack_tag": "v1.9.0",
-  "stack_commit": "3ef8552aa",
-  "installed": []
-}
--- lab-with-providers/.sal/installed.json --
+-- empty-project/.sal/lab.json --
+{"name": "empty-lab", "stack_tag": "v1.9.0"}
+-- stocked-project/.sal/lab.json --
+{"name": "stocked-lab", "stack_tag": "v1.9.0"}
+-- .config/secure-agent-lab/labs/empty-lab/compose.yaml --
+name: empty-lab
+-- .config/secure-agent-lab/labs/empty-lab/.sal/installed.json --
+{"stack_tag": "v1.9.0", "installed": []}
+-- .config/secure-agent-lab/labs/stocked-lab/compose.yaml --
+name: stocked-lab
+-- .config/secure-agent-lab/labs/stocked-lab/.sal/installed.json --
 {
   "stack_tag": "v1.9.0",
   "stack_commit": "3ef8552aa",
