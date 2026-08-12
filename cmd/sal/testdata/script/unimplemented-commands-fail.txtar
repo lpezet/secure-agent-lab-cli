@@ -9,15 +9,6 @@
 # implemented. That is the intended alarm — delete the line and write a real
 # script for it.
 
-! exec sal init
-stderr 'not implemented yet'
-
-! exec sal up
-stderr 'not implemented yet'
-
-! exec sal down
-stderr 'not implemented yet'
-
 ! exec sal open
 stderr 'not implemented yet'
 

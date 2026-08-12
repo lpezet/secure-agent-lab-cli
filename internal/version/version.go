@@ -26,6 +26,15 @@ var commit = ""
 // must never guess at.
 const MinimumStack = "1.9.0"
 
+// DefaultStack is what `sal init` pins to when nobody says otherwise.
+//
+// Honestly named: it is the newest release THIS BUILD knows about, not the
+// newest that exists. sal does not ask the stack repo what the latest release
+// is, because "newest" is a moving target and a lab's boundary should not
+// depend on when it happened to be created. --stack overrides it, and the
+// value is printed at init so the choice is never silent.
+const DefaultStack = "v1.9.0"
+
 // CLI returns this binary's own version. It is deliberately separate from the
 // stack tag: `sal --version` prints both, because "I am four versions behind"
 // is ambiguous otherwise and the two-repo split would have bought nothing.

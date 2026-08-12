@@ -54,6 +54,19 @@ func BankCacheDir() (string, error) {
 	return subdir("bank")
 }
 
+// LabsDir returns the root under which each project's deployment lives.
+//
+// Deployments live here rather than inside the project on purpose. The agent
+// works in the project directory, so a deployment kept there is one the agent
+// can edit — the dev-container example needs a read-only shadow mount over its
+// own .devcontainer for exactly that reason. Keeping the deployment out of the
+// workspace entirely is stronger than mounting it read-only: there is no mount
+// to get wrong, and proxy addons, broker providers and gateway configs are not
+// merely unwritable but invisible.
+func LabsDir() (string, error) {
+	return subdir("labs")
+}
+
 func subdir(name string) (string, error) {
 	dir, err := Dir()
 	if err != nil {

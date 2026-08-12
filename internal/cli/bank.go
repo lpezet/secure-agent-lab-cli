@@ -7,6 +7,8 @@ import (
 
 	"github.com/lpezet/secure-agent-lab-cli/internal/bank"
 	"github.com/lpezet/secure-agent-lab-cli/internal/deployment"
+	"github.com/lpezet/secure-agent-lab-cli/internal/lab"
+	"github.com/lpezet/secure-agent-lab-cli/internal/prompt"
 )
 
 // stackContext separates two versions that are easy to conflate and are not
@@ -33,10 +35,15 @@ type stackContext struct {
 func resolveStack(override string) (stackContext, error) {
 	var sc stackContext
 
-	root, rec, err := deployment.Find(cwd())
+	l, ptr, err := lab.Find(cwd())
 	if err == nil {
-		sc.LabRoot = root
-		sc.LabTag = rec.StackTag
+		sc.LabRoot = l.Dir
+		sc.LabTag = ptr.StackTag
+		// The deployment's own record beats the project's pointer: it says
+		// what was rendered rather than what was asked for.
+		if rec, recErr := deployment.Load(l.Dir); recErr == nil && rec.StackTag != "" {
+			sc.LabTag = rec.StackTag
+		}
 	}
 
 	switch {
@@ -47,7 +54,7 @@ func resolveStack(override string) (stackContext, error) {
 	case err != nil:
 		return sc, fmt.Errorf("%w; pass --stack to name a release explicitly", err)
 	default:
-		return sc, fmt.Errorf("%s records no stack tag; pass --stack to name one", root)
+		return sc, fmt.Errorf("%s records no stack tag; pass --stack to name one", sc.LabRoot)
 	}
 	return sc, nil
 }
@@ -62,4 +69,11 @@ func openBank(cmd *cobra.Command, tag string) (*bank.Bank, error) {
 		Offline: offline,
 		Refresh: refresh,
 	})
+}
+
+// confirm asks a yes/no question through internal/prompt, which returns the
+// default rather than blocking when there is no terminal — so a scripted run
+// declines a destructive action instead of hanging on a prompt nobody sees.
+func confirm(cmd *cobra.Command, question string) (bool, error) {
+	return prompt.Confirm(question, false)
 }

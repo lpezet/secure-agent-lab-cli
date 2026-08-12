@@ -41,9 +41,17 @@ exec sal providers list --available --stack v1.9.0 --offline
 ! stdout 'needs stack'
 stderr 'not in a lab'
 
--- lab/.sal/installed.json --
+-- lab/.sal/lab.json --
+{"name": "cur-lab", "stack_tag": "v1.9.0"}
+-- .config/secure-agent-lab/labs/cur-lab/compose.yaml --
+name: cur-lab
+-- .config/secure-agent-lab/labs/cur-lab/.sal/installed.json --
 {"stack_tag": "v1.9.0", "stack_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "installed": []}
--- oldlab/.sal/installed.json --
+-- oldlab/.sal/lab.json --
+{"name": "old-lab", "stack_tag": "v1.8.0"}
+-- .config/secure-agent-lab/labs/old-lab/compose.yaml --
+name: old-lab
+-- .config/secure-agent-lab/labs/old-lab/.sal/installed.json --
 {"stack_tag": "v1.8.0", "installed": []}
 -- .config/secure-agent-lab/bank/refs.json --
 {
