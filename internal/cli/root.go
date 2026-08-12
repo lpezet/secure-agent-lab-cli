@@ -47,6 +47,9 @@ func NewRootCmd() *cobra.Command {
 			if showVersion {
 				return runVersion(cmd)
 			}
+			if len(args) > 0 {
+				return unknownSubcommand(cmd, args[0])
+			}
 			return cmd.Help()
 		},
 	}
@@ -139,6 +142,35 @@ func warnIfStackTooOld(cmd *cobra.Command, tag string) {
 				"         whether it understands one it is reading. Run `sal upgrade` when you can.\n",
 			have.Tag(), min.Tag(), min.Tag())
 	}
+}
+
+// newGroup builds a command whose only job is to group others.
+//
+// Cobra's default when a group is handed something that is not one of its
+// subcommands is to print help and exit 0. That is the "appeared to succeed"
+// failure this CLI cannot afford. `sal observer disable` is a plausible thing
+// to type — it is deliberately not a command, because lifecycle verbs live in
+// `features` — and a script that ran it and saw exit 0 would carry on
+// believing the observer had been turned off.
+func newGroup(use, short string) *cobra.Command {
+	return &cobra.Command{
+		Use:   use,
+		Short: short,
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				return unknownSubcommand(cmd, args[0])
+			}
+			// A bare group with no arguments is a request for help, which is
+			// a fair thing to ask for and not an error.
+			return cmd.Help()
+		},
+	}
+}
+
+func unknownSubcommand(cmd *cobra.Command, arg string) error {
+	return fmt.Errorf("unknown command %q for %q — run '%s --help' to see what it does have",
+		arg, cmd.CommandPath(), cmd.CommandPath())
 }
 
 // notImplemented is what an unwritten command does. It is an error rather than

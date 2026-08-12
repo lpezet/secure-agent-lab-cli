@@ -1,0 +1,11 @@
+{
+  "schema_version": 99,
+  "name": "widget",
+  "summary": "Valid in every respect except a generation this build cannot understand",
+  "min_stack": "1.9.0",
+  "load_band": "provider",
+  "hosts": ["api.widget.example"],
+  "broker_routes": [
+    { "path": "/widget/token", "exposed": false }
+  ]
+}

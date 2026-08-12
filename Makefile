@@ -23,9 +23,19 @@ vet:
 fmt:
 	$(GO) fmt ./...
 
-# What CI runs. The invariants package is part of it, not an optional extra:
-# it is the guard on this repo having no per-provider code.
+# What CI runs. Two parts of it are not optional extras: internal/invariants is
+# the guard on this repo having no per-provider code, and cmd/sal's txtar
+# scripts are where the command grammar is actually asserted.
 check: vet test
+
+# Run a single txtar script:  make script SCRIPT=grammar
+script:
+	$(GO) test ./cmd/sal/ -run 'TestScripts/$(SCRIPT)' -v
+
+# Update txtar scripts in place from actual output, for when a deliberate
+# change to output makes several scripts stale at once. Read the diff.
+script-update:
+	$(GO) test ./cmd/sal/ -run TestScripts -update-scripts
 
 snapshot:
 	goreleaser release --snapshot --clean

@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "name": "acme",
+  "summary": "Fixture provider with every optional field populated",
+  "min_stack": "1.7.0",
+  "load_band": "provider",
+  "hosts": ["api.acme.example", "uploads.acme.example"],
+  "secrets": [
+    {
+      "env": "ACME_PRIVATE_KEY_PATH",
+      "file": "acme-app.pem",
+      "prompt": "Acme private key (.pem)",
+      "multiline": true
+    },
+    {
+      "env": "ACME_WEBHOOK_SECRET_PATH",
+      "file": "acme-webhook.txt",
+      "prompt": "Acme webhook secret",
+      "optional": true
+    }
+  ],
+  "config": [
+    {
+      "env": "ACME_APP_ID",
+      "prompt": "Acme App ID",
+      "help": "https://acme.example/settings/apps"
+    },
+    {
+      "env": "ACME_REGION",
+      "prompt": "Region",
+      "default": "us-east-1"
+    }
+  ],
+  "broker_routes": [
+    { "path": "/acme/token", "exposed": false },
+    { "path": "/acme/credential", "exposed": true },
+    { "path": "/acme/identity", "exposed": true }
+  ],
+  "lab_env": {
+    "ACME_CREDENTIAL_URL": "http://cred-gateway/acme/credential",
+    "ACME_IDENTITY_URL": "http://cred-gateway/acme/identity"
+  },
+  "lab_setup": "lab/setup.sh"
+}

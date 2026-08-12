@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "widget",
+  "summary": "Needs an image no deployment is running yet",
+  "min_stack": "99.0.0",
+  "load_band": "provider",
+  "hosts": ["api.widget.example"],
+  "broker_routes": [
+    { "path": "/widget/token", "exposed": false }
+  ]
+}

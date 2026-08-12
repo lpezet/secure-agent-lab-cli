@@ -72,10 +72,19 @@ make check    # go vet + go test
 make build    # bin/sal
 ```
 
-`internal/invariants` is the test that matters most: it fails if any bank entry
-name appears as a string literal in this repo's Go source. The bank is data and
-`sal` is a generic installer over it — the moment that test fails, the CLI has
-learned about a specific provider and the two repos are coupled again.
+Three layers, none of which needs Docker yet:
+
+- **`internal/invariants`** is the test that matters most: it fails if any bank
+  entry name appears as a string literal in this repo's Go source. The bank is
+  data and `sal` is a generic installer over it — the moment that test fails,
+  the CLI has learned about a specific provider and the two repos are coupled
+  again.
+- **`cmd/sal/testdata/script/*.txtar`** tests the CLI as its users meet it —
+  exit status, stdout versus stderr, the file tree left behind. It is where the
+  command grammar is observable: a unit test cannot tell you that
+  `sal observer disable` is not a command.
+- **`tests/fixtures/`** is a fake bank under invented provider names, plus a set
+  of manifests that must be refused. See its README for what each one traps.
 
 See `CLAUDE.md` for the decisions behind all of this and the reasoning that
 produced them.

@@ -9,10 +9,7 @@ import "github.com/spf13/cobra"
 // changes in this repo — so no command here may branch on which provider it
 // was handed. internal/invariants holds the test that says so.
 func newProvidersCmd() *cobra.Command {
-	group := &cobra.Command{
-		Use:   "providers",
-		Short: "Install and manage credential providers from the bank",
-	}
+	group := newGroup("providers", "Install and manage credential providers from the bank")
 	group.AddCommand(
 		newProvidersListCmd(),
 		newProvidersAddCmd(),

@@ -1,0 +1,21 @@
+# A lab pinned below sal's minimum WARNS. It does not fail.
+#
+# This is the third of the three version checks, and the only one this repo
+# owns. The other two are refusals. Getting the severity wrong in either
+# direction is a real cost: fail here and sal becomes unusable against an older
+# lab it can still mostly manage; refuse nothing anywhere and a manifest it
+# cannot understand gets installed anyway.
+
+exec sal version
+stdout '^stack\s+v1\.5\.0'
+
+# The warning goes to stderr, so it cannot corrupt anything parsing stdout.
+stderr 'warning: this lab is pinned to v1\.5\.0'
+stderr 'below the v1\.9\.0 that sal expects'
+stderr 'schema_version'
+
+-- .sal/installed.json --
+{
+  "stack_tag": "v1.5.0",
+  "installed": []
+}
