@@ -27,9 +27,6 @@ stderr 'not implemented yet'
 ! exec sal drift
 stderr 'not implemented yet'
 
-! exec sal providers list
-stderr 'not implemented yet'
-
 ! exec sal providers add acme
 stderr 'not implemented yet'
 

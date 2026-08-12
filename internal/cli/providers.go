@@ -1,6 +1,14 @@
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+	"text/tabwriter"
+
+	"github.com/spf13/cobra"
+
+	"github.com/lpezet/secure-agent-lab-cli/internal/deployment"
+	"github.com/lpezet/secure-agent-lab-cli/internal/manifest"
+)
 
 // newProvidersCmd builds the `sal providers` group.
 //
@@ -20,15 +28,124 @@ func newProvidersCmd() *cobra.Command {
 }
 
 func newProvidersListCmd() *cobra.Command {
-	var all bool
+	var (
+		available bool
+		stack     string
+	)
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List providers installed in this lab",
-		Args:  cobra.NoArgs,
-		RunE:  notImplemented,
+		Long: "By default, what is installed here — read from .sal/installed.json rather than\n" +
+			"guessed from filenames.\n\n" +
+			"With --available, what the bank offers at the stack release this lab is pinned\n" +
+			"to. Not at the newest release: offering entries from a bank newer than the lab\n" +
+			"runs would mean offering ones whose min_stack it does not satisfy, and that\n" +
+			"failure lands at runtime inside a container rather than here.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if available {
+				return runProvidersAvailable(cmd, stack)
+			}
+			return runProvidersInstalled(cmd)
+		},
 	}
-	cmd.Flags().BoolVar(&all, "available", false, "list what the bank offers at this lab's pinned stack tag, not what is installed")
+	cmd.Flags().BoolVar(&available, "available", false, "list what the bank offers at this lab's pinned stack tag, not what is installed")
+	cmd.Flags().StringVar(&stack, "stack", "", "read the bank at this release instead of the one this lab is pinned to")
 	return cmd
+}
+
+func runProvidersInstalled(cmd *cobra.Command) error {
+	root, rec, err := deployment.Find(cwd())
+	if err != nil {
+		return err
+	}
+
+	if len(rec.Installed) == 0 {
+		fmt.Fprintf(cmd.ErrOrStderr(), "no providers installed in %s\n", root)
+		return nil
+	}
+
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tSLOT\tSCHEMA\tFROM")
+	for _, e := range rec.Installed {
+		from := e.StackTag
+		if from == "" {
+			from = rec.StackTag
+		}
+		fmt.Fprintf(w, "%s\t%03d\t%d\t%s\n", e.Name, e.Slot, e.SchemaVersion, from)
+	}
+	return w.Flush()
+}
+
+func runProvidersAvailable(cmd *cobra.Command, stackOverride string) error {
+	sc, err := resolveStack(stackOverride)
+	if err != nil {
+		return err
+	}
+
+	b, err := openBank(cmd, sc.BankTag)
+	if err != nil {
+		return err
+	}
+	names, err := b.List()
+	if err != nil {
+		return err
+	}
+
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tMIN STACK\tSUMMARY")
+	for _, name := range names {
+		m, err := b.Manifest(name)
+		if err != nil {
+			// One unreadable entry must not hide the rest of the bank, but it
+			// must be visible rather than skipped silently.
+			fmt.Fprintf(w, "%s\t?\t(unreadable: %v)\n", name, err)
+			continue
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s%s\n", m.Name, m.MinStack, m.Summary, installability(m, sc))
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+
+	out := cmd.ErrOrStderr()
+	fmt.Fprintf(out, "\nbank at stack %s (%s)\n", b.Tag(), shortCommit(b.Commit()))
+	if sc.LabTag != "" && sc.LabTag != sc.BankTag {
+		fmt.Fprintf(out, "this lab runs stack %s, so installability is judged against that\n", sc.LabTag)
+	}
+	if sc.LabTag == "" {
+		fmt.Fprintf(out, "not in a lab, so whether each entry could be installed is unknown\n")
+	}
+	return nil
+}
+
+// installability annotates an entry with the reason it could not be installed
+// HERE, judged against what this lab runs rather than against the release the
+// entry was published in.
+//
+// With no lab there is nothing to judge against, and the honest answer is
+// silence — a blank column beats one that always says "fine".
+func installability(m *manifest.Manifest, sc stackContext) string {
+	if err := m.CheckSchemaVersion(); err != nil {
+		return "  [needs a newer sal]"
+	}
+	if sc.LabTag == "" {
+		return ""
+	}
+	if err := m.CheckMinStack(sc.LabTag); err != nil {
+		return "  [needs stack " + m.MinStack + "]"
+	}
+	return ""
+}
+
+func shortCommit(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	if sha == "" {
+		return "commit unrecorded"
+	}
+	return sha
 }
 
 func newProvidersAddCmd() *cobra.Command {
