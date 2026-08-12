@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -105,9 +107,8 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 	// pinned to a tag that does not — and a tag is mutable, so the commit is
 	// what records which boundary this lab was actually built from.
 	commit := ""
-	offline, _ := cmd.Flags().GetBool("offline")
-	if offline {
-		fmt.Fprintf(errOut, "warning: --offline, so %s is unverified and no commit is recorded\n", stackTag)
+	if local := stackDir(cmd); local != "" {
+		fmt.Fprintf(errOut, "reading stack content from %s, so %s is unverified and no commit is recorded\n", local, stackTag)
 	} else {
 		commit, err = bank.DefaultSource().ResolveTag(cmd.Context(), stackTag)
 		if err != nil {
@@ -123,7 +124,26 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 		return err
 	}
 
+	// Fetch the stack's own proxy addons BEFORE creating anything, so a lab is
+	// never left existing without them.
+	//
+	// This is not optional decoration. 000_policy.py is what stops the proxy
+	// forwarding to the broker — and the proxy sits on both networks, so
+	// without it the lab can ask the proxy to fetch http://broker:8080/<any
+	// route> and walk straight around the cred-gateway whitelist, including
+	// the routes a manifest marks exposed:false. A deployment missing it has a
+	// credential path with no gate on it.
+	addons, err := fetchBaseAddons(cmd, commit)
+	if err != nil {
+		return err
+	}
+	defer addons.Close()
+
 	if err := createLabTree(labDir); err != nil {
+		return err
+	}
+	installed, err := copyAddons(addons.Dir, filepath.Join(labDir, "proxy"))
+	if err != nil {
 		return err
 	}
 
@@ -156,6 +176,7 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 		StackTag:    stackTag,
 		StackCommit: commit,
 		Installed:   []deployment.Entry{},
+		BaseAddons:  installed,
 	}); err != nil {
 		return err
 	}
@@ -170,6 +191,9 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 		fmt.Fprintf(out, " (%s)", shortCommit(commit))
 	}
 	fmt.Fprintf(out, "\nproject  %s\n", projectDir)
+	for _, a := range installed {
+		fmt.Fprintf(out, "addon    %s\n", a)
+	}
 
 	fmt.Fprintf(errOut, "\nNext: `sal providers add <name>` to give it a credential path, then `sal up`.\n"+
 		"The first `sal up` builds five images from the stack repo and takes a few minutes.\n")
@@ -208,6 +232,54 @@ func splitLines(s string) []string {
 		out = append(out, string(l))
 	}
 	return out
+}
+
+// fetchBaseAddons obtains the stack's own proxy addons at the pinned release.
+//
+// Refused rather than skipped when unavailable: a lab created without the
+// policy addon has a cred-gateway whitelist that can be walked around, and
+// "created but not safe yet" is not a state worth being able to reach.
+func fetchBaseAddons(cmd *cobra.Command, commit string) (*bank.Tree, error) {
+	tree, err := bank.FetchTree(cmd.Context(), commit, bank.AddonsSubtree, bankOptions(cmd))
+	if err != nil {
+		return nil, fmt.Errorf("cannot obtain the stack's proxy addons, without which the lab would have "+
+			"no barrier between the lab container and the broker: %w", err)
+	}
+	return tree, nil
+}
+
+// copyAddons installs every addon the stack ships, without judging which
+// matter.
+//
+// Deliberately not a filtered list. The allowlist addon is inert when its file
+// is absent (it says so itself: every destination is permitted, with a warning
+// at startup), so installing all of them costs nothing and means sal does not
+// hold an opinion about which of the stack's addons are load-bearing — an
+// opinion that would silently go stale the moment the stack adds one.
+func copyAddons(srcDir, dstDir string) ([]string, error) {
+	items, err := os.ReadDir(srcDir)
+	if err != nil {
+		return nil, err
+	}
+	var installed []string
+	for _, it := range items {
+		if it.IsDir() || !strings.HasSuffix(it.Name(), ".py") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(srcDir, it.Name()))
+		if err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(dstDir, it.Name()), body, 0o644); err != nil {
+			return nil, err
+		}
+		installed = append(installed, it.Name())
+	}
+	if len(installed) == 0 {
+		return nil, fmt.Errorf("the stack's addon directory at %s is empty", srcDir)
+	}
+	sort.Strings(installed)
+	return installed, nil
 }
 
 func newUpCmd() *cobra.Command {

@@ -5,7 +5,11 @@
 //
 //	~/.config/secure-agent-lab/
 //	  secrets/        0700 — mounted into the broker, and nothing else here is
-//	  bank/           cache of bank trees, keyed by commit
+//	  labs/<name>/    one deployment per project
+//
+// Nothing here is a cache. Stack content is fetched to a temporary directory
+// when a command needs it and thrown away after, so everything under this
+// directory is state worth keeping.
 //
 // Mount `secrets/`, never its parent. The parent holds a bank cache and will
 // hold config besides; none of that belongs in the broker's filesystem, and a
@@ -47,11 +51,6 @@ func Dir() (string, error) {
 // written into it are 0600.
 func SecretsDir() (string, error) {
 	return subdir("secrets")
-}
-
-// BankCacheDir returns the root of the bank cache.
-func BankCacheDir() (string, error) {
-	return subdir("bank")
 }
 
 // LabsDir returns the root under which each project's deployment lives.

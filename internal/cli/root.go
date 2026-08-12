@@ -58,10 +58,10 @@ func NewRootCmd() *cobra.Command {
 
 	root.PersistentFlags().BoolVar(&showVersion, "version", false, "print the sal version and the stack version it is managing")
 
-	// Both concern how the bank is obtained, and every command that touches it
-	// needs them, so they are global rather than repeated per command.
-	root.PersistentFlags().Bool("offline", false, "never reach the network; use only what is already cached")
-	root.PersistentFlags().Bool("refresh", false, "re-resolve the stack tag even if it is cached, which is how a moved tag gets noticed")
+	// Every command that reads stack content needs this, so it is global
+	// rather than repeated per command.
+	root.PersistentFlags().String("stack-dir", "",
+		"read stack content from a local checkout instead of downloading it (an air-gapped machine, or an unreleased branch)")
 
 	root.AddCommand(
 		newProvidersCmd(),

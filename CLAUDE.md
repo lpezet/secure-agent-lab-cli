@@ -229,14 +229,30 @@ moving it is a copy. Note also that `stack/` in the stack repo is **not** that
 template: `stack/broker/` is the broker's source, while a deployment's `broker/`
 is the providers it loads. Same name, opposite roles.
 
-**Cache the bank by commit, never by tag.** A tag is a mutable pointer, so a
-tag-keyed cache serves the tree it first saw forever — and the failure is
-invisible: if a tag were ever moved to carry a fix, every machine that already
-fetched it keeps the old files and `sal upgrade` reports success having changed
-nothing. Key the tree by commit, which is immutable, and cache the tag → commit
-mapping separately so `--refresh` can re-resolve just the pointer. For the same
-reason, resolve the tag first and then download **by commit**, so a tag that
-moves mid-fetch cannot substitute a different tree under the name you asked for.
+**There is no cache, and that was a deliberate reversal.** An early version
+cached extracted trees under the config directory, keyed by commit, with a
+tag→commit index and an `--offline` flag. It bought 0.54 seconds on a 209KB
+download, for commands that run occasionally — in exchange for commit-keyed
+directories, staleness rules, subtree slugs and an unbounded directory that
+grew forever, all of which are state that can be wrong.
+
+The reason it was never needed: **a deployment already records the commit it is
+pinned to**, so every command against an existing lab knows exactly which tree
+it wants and fetches it straight into a temporary directory. Only the commands
+that CHOOSE a version — `init` and `upgrade --to` — resolve a tag at all, and
+they do it once, explicitly. Fetch by commit, never by tag: it is what stops a
+moved tag changing what an existing lab reads.
+
+`--stack-dir` points at a local checkout instead of downloading. It replaced
+`--offline` and is better in every direction: it names where content came from
+rather than depending on what a hidden cache happened to hold, it works on a
+machine that has never had network access, and it lets someone test an
+unreleased branch. It is also what the test suite uses, so no test reaches the
+network.
+
+If repeated fetches ever become a real cost — a `drift` check on every CI run,
+say — a cache can go back behind the same interface, justified by a measurement
+rather than by an assumption.
 
 **Extraction refuses every entry type except regular files and directories.**
 This is the one place in `sal` where bytes off the network become files on disk.

@@ -2,13 +2,19 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
+	"github.com/lpezet/secure-agent-lab-cli/internal/config"
 	"github.com/lpezet/secure-agent-lab-cli/internal/deployment"
+	"github.com/lpezet/secure-agent-lab-cli/internal/installer"
 	"github.com/lpezet/secure-agent-lab-cli/internal/lab"
 	"github.com/lpezet/secure-agent-lab-cli/internal/manifest"
+	"github.com/lpezet/secure-agent-lab-cli/internal/prompt"
 )
 
 // newProvidersCmd builds the `sal providers` group.
@@ -83,15 +89,16 @@ func runProvidersInstalled(cmd *cobra.Command) error {
 }
 
 func runProvidersAvailable(cmd *cobra.Command, stackOverride string) error {
-	sc, err := resolveStack(stackOverride)
+	sc, err := resolveStack(cmd, stackOverride)
 	if err != nil {
 		return err
 	}
 
-	b, err := openBank(cmd, sc.BankTag)
+	b, tree, err := openBank(cmd, sc.BankCommit)
 	if err != nil {
 		return err
 	}
+	defer tree.Close()
 	names, err := b.List()
 	if err != nil {
 		return err
@@ -114,7 +121,7 @@ func runProvidersAvailable(cmd *cobra.Command, stackOverride string) error {
 	}
 
 	out := cmd.ErrOrStderr()
-	fmt.Fprintf(out, "\nbank at stack %s (%s)\n", b.Tag(), shortCommit(b.Commit()))
+	fmt.Fprintf(out, "\nbank at stack %s (%s)\n", sc.BankTag, shortCommit(sc.BankCommit))
 	if sc.LabTag != "" && sc.LabTag != sc.BankTag {
 		fmt.Fprintf(out, "this lab runs stack %s, so installability is judged against that\n", sc.LabTag)
 	}
@@ -154,6 +161,7 @@ func shortCommit(sha string) string {
 }
 
 func newProvidersAddCmd() *cobra.Command {
+	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "add NAME",
 		Short: "Install a bank entry into this lab",
@@ -173,9 +181,162 @@ func newProvidersAddCmd() *cobra.Command {
 			"A route the manifest marks `exposed: false` must not appear in any generated\n" +
 			"gateway config. Exposing a token route would hand the lab a reusable secret.",
 		Args: cobra.ExactArgs(1),
-		RunE: notImplemented,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runProvidersAdd(cmd, args[0], dryRun)
+		},
 	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "run every check and print what would be written, without writing it")
 	return cmd
+}
+
+func runProvidersAdd(cmd *cobra.Command, name string, dryRun bool) error {
+	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+
+	l, _, err := lab.Find(cwd())
+	if err != nil {
+		return err
+	}
+	if !l.Exists() {
+		return fmt.Errorf("lab %q has no deployment at %s; run `sal init`", l.Name, l.Dir)
+	}
+	rec, err := deployment.Load(l.Dir)
+	if err != nil {
+		return err
+	}
+	// A stray addon the record does not mention must not have its number
+	// reused, or the new file silently shadows it in load order.
+	installer.ObserveOnDiskSlots(l.Dir, rec)
+
+	// The commit this lab was built from, straight out of its own record —
+	// no tag resolution, and no way for a moved tag to change what an
+	// existing lab installs from.
+	commit, err := commitFor(cmd, rec)
+	if err != nil {
+		return err
+	}
+	b, tree, err := openBank(cmd, commit)
+	if err != nil {
+		return err
+	}
+	defer tree.Close()
+
+	// Everything that can be refused is refused here, before a byte is
+	// written. A half-installed credential path is worse than none.
+	plan, err := installer.BuildPlan(b, name, rec, rec.StackTag)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "%s — %s\n", plan.Manifest.Name, plan.Manifest.Summary)
+	fmt.Fprintf(out, "slot     %03d (%s band)\n", plan.Slot, plan.Manifest.LoadBand)
+	fmt.Fprintf(out, "hosts    %s\n", strings.Join(plan.Manifest.Hosts, ", "))
+	for _, f := range plan.Files {
+		fmt.Fprintf(out, "write    %s\n", f.Dst)
+	}
+	for _, r := range plan.Manifest.BrokerRoutes {
+		state := "not exposed to the lab"
+		if r.IsExposed() {
+			state = "whitelisted for the lab"
+		}
+		fmt.Fprintf(out, "route    %s — %s\n", r.Path, state)
+	}
+
+	if dryRun {
+		fmt.Fprintf(errOut, "\ndry run: every check passed and nothing was written\n")
+		return nil
+	}
+
+	secretsDir, err := config.SecretsDir()
+	if err != nil {
+		return err
+	}
+	values, err := collectValues(cmd, plan, secretsDir)
+	if err != nil {
+		return err
+	}
+
+	entry, err := plan.Apply(l.Dir, secretsDir, rec.StackTag, values)
+	if err != nil {
+		return err
+	}
+	rec.Installed = append(rec.Installed, *entry)
+	if err := deployment.Save(l.Dir, rec); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(errOut, "\ninstalled %s into %s\n", entry.Name, l.Name)
+	fmt.Fprintf(errOut, "Run `sal up` to restart the lab against it — the broker, proxy and\n"+
+		"cred-gateway read these files at startup, so a running lab has not picked them up.\n")
+
+	// Honest about a gap rather than quietly leaving a file nothing reads.
+	for _, f := range plan.Files {
+		if strings.HasPrefix(f.Dst, "lab/") {
+			fmt.Fprintf(errOut, "\nnote: %s was installed but is NOT sourced automatically. The stack's\n"+
+				"      lab_setup mechanism assumes the deployment sits inside the workspace, and\n"+
+				"      here it deliberately does not. Run it yourself with:\n"+
+				"        docker compose -f %s exec lab bash /workspace/../%s\n",
+				f.Dst, l.ComposeFile(), f.Dst)
+		}
+	}
+	return nil
+}
+
+// collectValues prompts for what the manifest declares, keeping the two kinds
+// apart: a secret is a file under the secrets directory read with echo off, a
+// config value is a line in .env. Conflating them is how a credential ends up
+// somewhere it can be read.
+func collectValues(cmd *cobra.Command, plan *installer.Plan, secretsDir string) (installer.Values, error) {
+	v := installer.Values{
+		Secrets: map[string][]byte{},
+		Config:  map[string]string{},
+	}
+	errOut := cmd.ErrOrStderr()
+
+	for _, s := range plan.Manifest.Secrets {
+		path := filepath.Join(secretsDir, s.File)
+		if _, err := os.Stat(path); err == nil {
+			// Credentials are shared across labs on this machine. Re-prompting
+			// for one already stored invites pasting a different value and
+			// silently repointing every other lab that uses it.
+			fmt.Fprintf(errOut, "using the %s already stored at %s\n", s.File, secretsDir)
+			// Reuse skips the write, so it would also skip the mode. A
+			// credential that arrived at 0644 by some other route must not
+			// stay that way just because sal did not create it.
+			tightened, err := installer.EnsureSecretMode(path)
+			if err != nil {
+				return v, err
+			}
+			if tightened {
+				fmt.Fprintf(errOut, "  tightened %s to 0600\n", s.File)
+			}
+			continue
+		}
+
+		value, err := prompt.ReadSecret(s.Prompt, s.Multiline)
+		if err != nil {
+			return v, err
+		}
+		if len(value) == 0 {
+			if s.Optional {
+				fmt.Fprintf(errOut, "skipped %s (optional)\n", s.Env)
+				continue
+			}
+			return v, fmt.Errorf("%s is required", s.Env)
+		}
+		v.Secrets[s.Env] = value
+	}
+
+	for _, c := range plan.Manifest.Config {
+		if c.Help != "" {
+			fmt.Fprintf(errOut, "  %s\n", c.Help)
+		}
+		value, err := prompt.Line(c.Prompt, c.Default)
+		if err != nil {
+			return v, err
+		}
+		v.Config[c.Env] = value
+	}
+	return v, nil
 }
 
 func newProvidersCreateCmd() *cobra.Command {

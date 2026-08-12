@@ -19,7 +19,7 @@ func fixtureDir(t *testing.T, parts ...string) string {
 // drifted out of validity fails every test that uses it, in a way that looks
 // like the code broke — so check the fixtures themselves, separately, first.
 func TestFixtureBankInstalls(t *testing.T) {
-	root := fixtureDir(t, "bank")
+	root := fixtureDir(t, "local-stack", "bank")
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func TestFixtureBankInstalls(t *testing.T) {
 // pin a lab between them and watch exactly one be refused. If that stops being
 // true the fixtures have lost the property they were built for.
 func TestFixtureBankStraddlesAStackVersion(t *testing.T) {
-	root := fixtureDir(t, "bank")
+	root := fixtureDir(t, "local-stack", "bank")
 
 	older, err := Load(filepath.Join(root, "acme"))
 	if err != nil {
@@ -82,7 +82,7 @@ func TestFixtureBankStraddlesAStackVersion(t *testing.T) {
 // that is not an oversight in the fixture — it is the shape a
 // proxy-injection-only provider takes.
 func TestFixtureWithNothingExposedShipsNoGatewayConfig(t *testing.T) {
-	dir := fixtureDir(t, "bank", "widget")
+	dir := fixtureDir(t, "local-stack", "bank", "widget")
 	m, err := Load(dir)
 	if err != nil {
 		t.Fatal(err)

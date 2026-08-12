@@ -7,6 +7,7 @@
 package prompt
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -71,6 +72,42 @@ func ReadSecret(label string, multiline bool) ([]byte, error) {
 		return nil, nil
 	}
 	return []byte(strings.Join(lines, "\n") + "\n"), nil
+}
+
+// Line reads a non-secret value, echoed, offering a default.
+//
+// Unlike ReadSecret this is not refused without a terminal — the value is
+// config, not a credential — but with no terminal and no default there is
+// nothing to fall back to, and guessing config is how a lab ends up pointed at
+// the wrong account.
+func Line(label, def string) (string, error) {
+	if def != "" {
+		fmt.Fprintf(os.Stderr, "%s [%s]: ", label, def)
+	} else {
+		fmt.Fprintf(os.Stderr, "%s: ", label)
+	}
+
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Fprintln(os.Stderr)
+		if def == "" {
+			return "", fmt.Errorf("%s: no value given and no terminal to ask on", label)
+		}
+		return def, nil
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	line = strings.TrimRight(line, "\r\n")
+	if line == "" {
+		if def == "" {
+			return "", fmt.Errorf("%s: a value is required", label)
+		}
+		return def, nil
+	}
+	return line, nil
 }
 
 // Confirm asks a yes/no question. Unlike ReadSecret this may read a

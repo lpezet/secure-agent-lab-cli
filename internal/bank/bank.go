@@ -1,4 +1,14 @@
-// Package bank fetches and caches bank trees from the stack repo.
+// Package bank obtains subtrees of the stack repo and reads bank entries out
+// of them.
+//
+// There is deliberately no cache. A deployment already records the commit it
+// is pinned to, so every command against an existing lab knows exactly which
+// tree it needs and can fetch it — 209KB, about half a second — into a
+// temporary directory it then throws away. A cache would buy that half second
+// back in exchange for commit-keyed directories, a tag→commit index, staleness
+// rules and an --offline flag, all of which are state that can be wrong. If
+// repeated fetches ever become a real cost, the measurement will say so and a
+// cache can go behind this same interface.
 //
 // The bank is data. This package knows how to obtain it and how to enumerate
 // what is in it; it knows nothing about any particular entry, and must not
@@ -9,7 +19,6 @@ package bank
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -17,65 +26,76 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"time"
 
 	"github.com/lpezet/secure-agent-lab-cli/internal/manifest"
 )
 
-// subtree is the directory inside the stack repo that this package extracts.
-// Everything else in the archive is discarded: sal installs bank entries, and
-// has no business holding a copy of the stack's compose files or test suite.
-const subtree = "bank"
+// Subtrees of the stack repo that sal fetches. Everything else in an archive
+// is discarded: sal has no business holding a copy of the stack's test suite.
+const (
+	// BankSubtree holds the provider entries.
+	BankSubtree = "bank"
 
-// completeMarker records provenance and, by existing, says the directory beside
-// it was fully extracted. It is written before the atomic rename into place, so
-// a cache directory can never be half a bank.
-const completeMarker = ".sal-cache.json"
+	// AddonsSubtree holds the proxy addons every deployment needs regardless
+	// of which providers it installs — including the policy addon that stops
+	// the proxy forwarding to the broker. A deployment without it has a
+	// cred-gateway whitelist that can be walked around, because the proxy is
+	// on both networks and will forward anywhere it is asked to.
+	AddonsSubtree = "stack/proxy/addons"
+)
 
 // entryNamePattern mirrors the schema's `name`. Applied before any name from a
 // caller is joined onto a path.
 var entryNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
-// Provenance is what the cache records about a fetched tree.
-type Provenance struct {
-	Tag       string    `json:"tag"`
-	Commit    string    `json:"commit"`
-	FetchedAt time.Time `json:"fetched_at"`
-	Files     int       `json:"files"`
-}
-
-// Bank is one fetched bank tree, on disk.
-type Bank struct {
-	dir  string
-	prov Provenance
-}
-
-// Options controls how Open obtains a tree.
+// Options controls how a tree is obtained.
 type Options struct {
-	// CacheDir defaults to the bank cache under the config directory.
-	CacheDir string
+	// StackDir is a local checkout of the stack repo to read instead of
+	// downloading. Serves an air-gapped machine, an unreleased branch, and the
+	// test suite — all cases the deleted --offline flag served worse, because
+	// this one names where the content came from rather than depending on
+	// whatever a hidden cache happened to hold.
+	StackDir string
 
 	// Source defaults to the stack repo.
 	Source *Source
 
-	// Refresh re-resolves the tag even when it is already cached, which is how
-	// a moved tag gets noticed. The tree itself is still reused if the commit
-	// is unchanged.
-	Refresh bool
-
-	// Offline refuses to touch the network. A cached tag succeeds; anything
-	// else fails saying so, rather than hanging on a timeout.
-	Offline bool
-
 	Limits Limits
 }
 
-// Open returns the bank tree for a stack tag, fetching it if it is not cached.
-func Open(ctx context.Context, tag string, opts Options) (*Bank, error) {
-	cache, err := newCache(opts.CacheDir)
-	if err != nil {
-		return nil, err
+// Tree is a subtree of the stack repo, on disk and ready to read.
+type Tree struct {
+	Dir string
+
+	// tmp is non-empty when this tree was extracted into a temporary
+	// directory that Close must remove.
+	tmp string
+}
+
+// Close releases the tree. Safe to call on a tree backed by a local checkout,
+// where it does nothing — the caller's directory is not sal's to delete.
+func (t *Tree) Close() error {
+	if t == nil || t.tmp == "" {
+		return nil
 	}
+	return os.RemoveAll(t.tmp)
+}
+
+// FetchTree obtains one subtree of the stack repo at a commit.
+//
+// By commit, not by tag, because a tag is a mutable pointer and every caller
+// with an existing deployment already knows the commit — it is in the install
+// record. Only the commands that CHOOSE a version resolve a tag, and they do
+// it once, explicitly.
+func FetchTree(ctx context.Context, commit, subtree string, opts Options) (*Tree, error) {
+	if opts.StackDir != "" {
+		dir := filepath.Join(opts.StackDir, filepath.FromSlash(subtree))
+		if _, err := os.Stat(dir); err != nil {
+			return nil, fmt.Errorf("%s has no %s directory: %w", opts.StackDir, subtree, err)
+		}
+		return &Tree{Dir: dir}, nil
+	}
+
 	src := opts.Source
 	if src == nil {
 		src = DefaultSource()
@@ -85,59 +105,29 @@ func Open(ctx context.Context, tag string, opts Options) (*Bank, error) {
 		lim = DefaultLimits()
 	}
 
-	// The cached tag → commit mapping is what makes the common case free. It
-	// is a cache of a mutable pointer, which is exactly why --refresh exists.
-	sha, known := cache.lookup(tag)
-
-	if !known || opts.Refresh {
-		if opts.Offline {
-			if !known {
-				return nil, fmt.Errorf("stack %s is not cached and --offline was given", tag)
-			}
-		} else {
-			resolved, err := src.ResolveTag(ctx, tag)
-			if err != nil {
-				// A tag already resolved once is better than nothing when the
-				// network is the problem rather than the tag.
-				if !known {
-					return nil, err
-				}
-			} else {
-				sha = resolved
-			}
-		}
-	}
-
-	// Guards every path below that joins the commit onto a directory or a URL.
-	if !shaPattern.MatchString(sha) {
-		return nil, fmt.Errorf("could not determine which commit stack %s points at", tag)
-	}
-
-	dir := cache.commitDir(sha)
-	if prov, err := readProvenance(dir); err == nil {
-		if err := cache.record(tag, sha); err != nil {
-			return nil, err
-		}
-		prov.Tag = tag
-		return &Bank{dir: dir, prov: prov}, nil
-	}
-
-	if opts.Offline {
-		return nil, fmt.Errorf("stack %s (%s) is not in the cache and --offline was given", tag, short(sha))
-	}
-
-	prov, err := fetch(ctx, src, cache, tag, sha, lim)
+	body, err := src.download(ctx, commit)
 	if err != nil {
 		return nil, err
 	}
-	if err := cache.record(tag, sha); err != nil {
+	defer body.Close()
+
+	tmp, err := os.MkdirTemp("", "sal-stack-")
+	if err != nil {
 		return nil, err
 	}
-	return &Bank{dir: cache.commitDir(sha), prov: *prov}, nil
+	if _, err := extractSubtree(body, subtree, tmp, lim); err != nil {
+		os.RemoveAll(tmp)
+		return nil, fmt.Errorf("extracting %s at %s: %w", subtree, short(commit), err)
+	}
+	return &Tree{Dir: tmp, tmp: tmp}, nil
 }
 
-// OpenDir wraps an already-extracted bank tree, for tests and for a local
-// checkout. It performs no network access and records no provenance.
+// Bank is a bank subtree on disk.
+type Bank struct {
+	dir string
+}
+
+// OpenDir wraps an already-extracted bank subtree.
 func OpenDir(dir string) (*Bank, error) {
 	if _, err := os.Stat(dir); err != nil {
 		return nil, err
@@ -145,54 +135,18 @@ func OpenDir(dir string) (*Bank, error) {
 	return &Bank{dir: dir}, nil
 }
 
-func fetch(ctx context.Context, src *Source, c *cache, tag, sha string, lim Limits) (*Provenance, error) {
-	body, err := src.download(ctx, sha)
+// Open fetches the bank subtree at a commit and wraps it. The caller closes
+// the returned tree.
+func Open(ctx context.Context, commit string, opts Options) (*Bank, *Tree, error) {
+	tree, err := FetchTree(ctx, commit, BankSubtree, opts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer body.Close()
-
-	// Extract into a scratch directory and rename into place, so a failure
-	// part-way leaves no directory that looks complete.
-	tmp, err := os.MkdirTemp(c.root, ".partial-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(tmp)
-
-	files, err := extractSubtree(body, subtree, tmp, lim)
-	if err != nil {
-		return nil, fmt.Errorf("extracting stack %s: %w", tag, err)
-	}
-
-	prov := Provenance{Tag: tag, Commit: sha, FetchedAt: time.Now().UTC(), Files: files}
-	if err := writeJSON(filepath.Join(tmp, completeMarker), prov); err != nil {
-		return nil, err
-	}
-
-	dest := c.commitDir(sha)
-	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
-		return nil, err
-	}
-	if err := os.Rename(tmp, dest); err != nil {
-		// Another sal fetched the same commit first, which is fine — the
-		// content is identical by construction.
-		if readErr := func() error { _, e := readProvenance(dest); return e }(); readErr == nil {
-			return &prov, nil
-		}
-		return nil, err
-	}
-	return &prov, nil
+	return &Bank{dir: tree.Dir}, tree, nil
 }
 
-// Dir is the extracted bank directory.
+// Dir is the bank directory.
 func (b *Bank) Dir() string { return b.dir }
-
-// Tag is the stack release this tree was fetched for.
-func (b *Bank) Tag() string { return b.prov.Tag }
-
-// Commit is what that tag resolved to. Record this, not just the tag.
-func (b *Bank) Commit() string { return b.prov.Commit }
 
 // List returns the entry names in the bank, sorted.
 //
@@ -226,7 +180,7 @@ func (b *Bank) EntryDir(name string) (string, error) {
 	dir := filepath.Join(b.dir, name)
 	if _, err := os.Stat(filepath.Join(dir, manifest.Filename)); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("the bank has no entry named %q at stack %s", name, b.prov.Tag)
+			return "", fmt.Errorf("the bank has no entry named %q", name)
 		}
 		return "", err
 	}
@@ -242,24 +196,4 @@ func (b *Bank) Manifest(name string) (*manifest.Manifest, error) {
 		return nil, err
 	}
 	return manifest.Load(dir)
-}
-
-func readProvenance(dir string) (Provenance, error) {
-	var p Provenance
-	b, err := os.ReadFile(filepath.Join(dir, completeMarker))
-	if err != nil {
-		return p, err
-	}
-	if err := json.Unmarshal(b, &p); err != nil {
-		return p, err
-	}
-	return p, nil
-}
-
-func writeJSON(path string, v any) error {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, append(b, '\n'), 0o600)
 }
