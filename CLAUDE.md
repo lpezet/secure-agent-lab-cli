@@ -182,6 +182,23 @@ loopback-only binding survives untouched. Keep the `127.0.0.1` prefix: observer
 publishes the audit trail over plain HTTP with no auth, and it is only safe
 because it is not reachable off the host.
 
+**Cache the bank by commit, never by tag.** A tag is a mutable pointer, so a
+tag-keyed cache serves the tree it first saw forever — and the failure is
+invisible: if a tag were ever moved to carry a fix, every machine that already
+fetched it keeps the old files and `sal upgrade` reports success having changed
+nothing. Key the tree by commit, which is immutable, and cache the tag → commit
+mapping separately so `--refresh` can re-resolve just the pointer. For the same
+reason, resolve the tag first and then download **by commit**, so a tag that
+moves mid-fetch cannot substitute a different tree under the name you asked for.
+
+**Extraction refuses every entry type except regular files and directories.**
+This is the one place in `sal` where bytes off the network become files on disk.
+A symlink in a source archive is a link that can be aimed outside the directory
+it lands in, and a hardlink is worse; deciding which are safe is a harder
+problem than having none. The bank contains neither, so nothing legitimate is
+lost and a future entry that needs one gets a loud refusal rather than a quiet
+extraction. Modes come from `sal`, not from the archive.
+
 **Never take a credential value as an argv.** `sal secrets set` reads from the
 TTY with echo off. An argv is in shell history, in `ps`, and in any process
 listing the agent can run. Same rule for anything that shells out.

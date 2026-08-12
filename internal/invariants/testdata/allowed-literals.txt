@@ -13,3 +13,11 @@
 
 https://github.com/lpezet/secure-agent-lab
 https://github.com/lpezet/secure-agent-lab-cli
+
+# internal/bank fetches the stack over HTTPS rather than by clone. These name
+# the host the stack repo happens to be published on, and the media type its
+# API speaks. Both would be equally true if the bank were empty — which is the
+# test for whether a literal is provider knowledge or not.
+https://api.github.com
+https://codeload.github.com
+application/vnd.github+json

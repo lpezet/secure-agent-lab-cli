@@ -1,0 +1,61 @@
+# `sal providers list` reads .sal/installed.json rather than guessing from
+# filenames, and `--available` reads the bank at the release this lab is
+# pinned to.
+#
+# Nothing here touches the network: the paths that would are driven with
+# --offline, which is itself the thing being asserted.
+
+# Outside a lab there is nothing to list, and the error says what is missing
+# rather than printing an empty table.
+! exec sal providers list
+stderr 'not a secure-agent-lab deployment'
+
+cd lab
+
+# An empty lab is not an error — it is a lab with nothing installed yet. The
+# message goes to stderr so that piping stdout yields an empty list, not prose.
+exec sal providers list
+! stdout .
+stderr 'no providers installed'
+
+cd ../lab-with-providers
+
+exec sal providers list
+stdout 'NAME\s+SLOT\s+SCHEMA\s+FROM'
+
+# The slot is printed with its leading zeros, because that is how it appears in
+# the filename the installer assigned.
+stdout 'acme\s+010\s+1\s+v1\.9\.0'
+stdout 'widget\s+011\s+1\s+v1\.9\.0'
+
+# --available needs to know which release to read the bank at. Outside a lab
+# that is unanswerable, and the error says how to answer it.
+cd ..
+! exec sal providers list --available
+stderr 'not a secure-agent-lab deployment'
+stderr '--stack'
+
+# With a release named and nothing cached, --offline fails immediately and says
+# why, rather than hanging on a connection it was told not to make.
+! exec sal providers list --available --stack v1.9.0 --offline
+stderr 'not cached|offline'
+
+# A malformed release tag is refused before any request is attempted.
+! exec sal providers list --available --stack main --offline
+! exec sal providers list --available --stack ../../etc --offline
+
+-- lab/.sal/installed.json --
+{
+  "stack_tag": "v1.9.0",
+  "stack_commit": "3ef8552aa",
+  "installed": []
+}
+-- lab-with-providers/.sal/installed.json --
+{
+  "stack_tag": "v1.9.0",
+  "stack_commit": "3ef8552aa",
+  "installed": [
+    {"name": "acme",   "slot": 10, "schema_version": 1, "files": ["proxy/010_acme.py"]},
+    {"name": "widget", "slot": 11, "schema_version": 1, "files": ["proxy/011_widget.py"]}
+  ]
+}
