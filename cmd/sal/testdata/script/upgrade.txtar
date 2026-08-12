@@ -1,0 +1,146 @@
+# `sal upgrade` — the reason this CLI exists.
+#
+# A deployment holds its own copies of the files the boundary lives in, so
+# repinning without rewriting them is not an upgrade. These check that the
+# rewriting actually happens, including the deletions.
+
+cd project
+
+# The plan is reported before anything changes, and names every file.
+exec sal upgrade --to v1.10.0 --stack-dir $WORK/new-stack --dry-run
+stdout '^from\s+v1\.9\.0'
+stdout '^to\s+v1\.10\.0'
+stdout 'provider acme \(slot 010, unchanged\)'
+stdout 'rewrite broker/acme\.js'
+stdout 'rewrite proxy/010_acme\.py'
+
+# The deletion is the part that matters most. acme stopped shipping a gateway
+# config at v1.10.0, and a stale one left behind would keep whitelisting a
+# route the entry no longer exposes.
+stdout 'DELETE  cred-gateway/acme\.conf \(not shipped at v1\.10\.0\)'
+
+# A base addon the new release dropped goes too.
+stdout 'DELETE   002_retired\.py \(not shipped at v1\.10\.0\)'
+stdout '^addon\s+000_policy\.py'
+stderr 'nothing was changed'
+
+# A dry run changes nothing at all.
+grep '"stack_tag": "v1.9.0"' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
+exists $WORK/.config/secure-agent-lab/labs/demo-lab/cred-gateway/acme.conf
+
+# Now for real.
+exec sal upgrade --to v1.10.0 --stack-dir $WORK/new-stack
+stderr 'upgraded demo-lab to v1\.10\.0'
+
+# The containers are still on the old release until they are rebuilt, and it
+# says so rather than letting someone believe the fix is live.
+stderr 'sal up --build'
+stderr 'still running the old one'
+
+# The slot is unchanged: it is the addon's load order, and load order is a
+# security property.
+exists $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/010_acme.py
+grep 'v1.10.0 addon' $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/010_acme.py
+
+# The stale files are gone, not merely superseded.
+! exists $WORK/.config/secure-agent-lab/labs/demo-lab/cred-gateway/acme.conf
+! exists $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/002_retired.py
+
+# Both records moved: the deployment's, and the project's committable pointer.
+grep '"stack_tag": "v1.10.0"' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
+grep '"stack_tag": "v1.10.0"' .sal/lab.json
+
+# And the compose file was re-rendered, or the lab would rebuild from the old
+# release no matter what the record says.
+grep '#v1.10.0:stack/broker' $WORK/.config/secure-agent-lab/labs/demo-lab/compose.yaml
+! grep '#v1.9.0:' $WORK/.config/secure-agent-lab/labs/demo-lab/compose.yaml
+
+# A provider that cannot make the move refuses the WHOLE upgrade. Half a
+# deployment on each of two releases is a boundary nobody can describe.
+cd $WORK/blocked
+! exec sal upgrade --to v1.10.0 --stack-dir $WORK/new-stack
+stderr 'cannot make the move'
+stderr 'needs stack v9\.9\.9'
+stderr 'Nothing has been changed'
+stderr 'sal providers remove'
+
+# And nothing was: the record still names the old release.
+grep '"stack_tag": "v1.9.0"' $WORK/.config/secure-agent-lab/labs/blocked-lab/.sal/installed.json
+
+-- project/.sal/lab.json --
+{"name": "demo-lab", "stack_tag": "v1.9.0"}
+-- blocked/.sal/lab.json --
+{"name": "blocked-lab", "stack_tag": "v1.9.0"}
+-- .config/secure-agent-lab/labs/demo-lab/compose.yaml --
+name: demo-lab
+services:
+  broker:
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.9.0:stack/broker
+-- .config/secure-agent-lab/labs/demo-lab/.sal/installed.json --
+{
+  "stack_tag": "v1.9.0",
+  "base_addons": ["000_policy.py", "002_retired.py"],
+  "installed": [
+    {
+      "name": "acme",
+      "slot": 10,
+      "schema_version": 1,
+      "stack_tag": "v1.9.0",
+      "files": ["broker/acme.js", "proxy/010_acme.py", "cred-gateway/acme.conf"]
+    }
+  ]
+}
+-- .config/secure-agent-lab/labs/demo-lab/broker/acme.js --
+// v1.9.0
+-- .config/secure-agent-lab/labs/demo-lab/proxy/010_acme.py --
+# v1.9.0 addon
+-- .config/secure-agent-lab/labs/demo-lab/proxy/000_policy.py --
+# v1.9.0 policy
+-- .config/secure-agent-lab/labs/demo-lab/proxy/002_retired.py --
+# an addon the new release no longer ships
+-- .config/secure-agent-lab/labs/demo-lab/cred-gateway/acme.conf --
+location = /acme/credential { proxy_pass http://broker:8080; }
+-- .config/secure-agent-lab/labs/demo-lab/.env --
+ACME_REGION=us-east-1
+-- .config/secure-agent-lab/labs/blocked-lab/compose.yaml --
+name: blocked-lab
+-- .config/secure-agent-lab/labs/blocked-lab/.sal/installed.json --
+{
+  "stack_tag": "v1.9.0",
+  "base_addons": ["000_policy.py"],
+  "installed": [
+    {"name": "demanding", "slot": 10, "schema_version": 1, "files": ["proxy/010_demanding.py"]}
+  ]
+}
+-- new-stack/bank/acme/provider.json --
+{
+  "schema_version": 1,
+  "name": "acme",
+  "summary": "At v1.10.0 this entry no longer exposes anything to the lab",
+  "min_stack": "1.7.0",
+  "load_band": "provider",
+  "hosts": ["api.acme.example"],
+  "config": [{"env": "ACME_REGION", "prompt": "Region", "default": "us-east-1"}],
+  "broker_routes": [{"path": "/acme/token", "exposed": false}]
+}
+-- new-stack/bank/acme/broker/acme.js --
+// v1.10.0
+-- new-stack/bank/acme/proxy/acme.py --
+# v1.10.0 addon
+HOSTS = ("api.acme.example",)
+-- new-stack/bank/demanding/provider.json --
+{
+  "schema_version": 1,
+  "name": "demanding",
+  "summary": "Needs an image far newer than the release being moved to",
+  "min_stack": "9.9.9",
+  "load_band": "provider",
+  "hosts": ["api.demanding.example"],
+  "broker_routes": [{"path": "/demanding/token", "exposed": false}]
+}
+-- new-stack/bank/demanding/proxy/demanding.py --
+HOSTS = ("api.demanding.example",)
+-- new-stack/stack/proxy/addons/000_policy.py --
+_INTERNAL_HOSTS = {"broker", "cred-gateway"}
+-- new-stack/stack/proxy/addons/001_allowlist.py --
+# inert without /etc/agent-allowlist

@@ -12,9 +12,6 @@
 ! exec sal open
 stderr 'not implemented yet'
 
-! exec sal upgrade
-stderr 'not implemented yet'
-
 ! exec sal drift
 stderr 'not implemented yet'
 

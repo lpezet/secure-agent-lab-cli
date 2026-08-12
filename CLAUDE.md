@@ -229,6 +229,25 @@ moving it is a copy. Note also that `stack/` in the stack repo is **not** that
 template: `stack/broker/` is the broker's source, while a deployment's `broker/`
 is the providers it loads. Same name, opposite roles.
 
+**An upgrade rewrites files, and DELETES the ones the new release dropped.**
+Repinning without rewriting is not an upgrade — that is the problem this repo
+exists for. The deletion half carries its own risk and is easy to forget: a
+cred-gateway config left behind keeps whitelisting a route the entry no longer
+exposes, which is a widened boundary nothing would report. An entry keeps the
+slot it was assigned, because the slot is the addon's filename prefix and
+therefore its load order, and load order is a security property. And one
+provider that cannot make the move refuses the WHOLE upgrade: half a deployment
+on each of two releases is a boundary nobody can describe.
+
+**A function that reads state must not quietly write it.** Slot observation
+once appended what it found on disk to the install record, and its caller saved
+that record — writing the stack's own proxy addons into `installed.json` as if
+they were bank entries named `policy` and `allowlist`. `check-drift.sh` reads
+that field to decide which entries a deployment claims, so a healthy lab
+reported drift forever, and `upgrade` refused because no bank has those
+entries. It reads into a set now. The record says which BANK ENTRIES are
+installed; a stack addon is not one, and `base_addons` is where those live.
+
 **There is no cache, and that was a deliberate reversal.** An early version
 cached extracted trees under the config directory, keyed by commit, with a
 tag→commit index and an `--offline` flag. It bought 0.54 seconds on a 209KB

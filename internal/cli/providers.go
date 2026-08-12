@@ -203,9 +203,11 @@ func runProvidersAdd(cmd *cobra.Command, name string, dryRun bool) error {
 	if err != nil {
 		return err
 	}
-	// A stray addon the record does not mention must not have its number
-	// reused, or the new file silently shadows it in load order.
-	installer.ObserveOnDiskSlots(l.Dir, rec)
+	// Which addon numbers are already taken — from the record and from disk,
+	// since a stray addon the record does not mention must not have its number
+	// reused. Read into a set, never folded into the record: the record says
+	// which BANK ENTRIES are installed, and a stack addon is not one.
+	occupied := installer.OccupiedSlots(l.Dir, rec)
 
 	// The commit this lab was built from, straight out of its own record —
 	// no tag resolution, and no way for a moved tag to change what an
@@ -222,7 +224,7 @@ func runProvidersAdd(cmd *cobra.Command, name string, dryRun bool) error {
 
 	// Everything that can be refused is refused here, before a byte is
 	// written. A half-installed credential path is worse than none.
-	plan, err := installer.BuildPlan(b, name, rec, rec.StackTag)
+	plan, err := installer.BuildPlan(b, name, rec, occupied, rec.StackTag)
 	if err != nil {
 		return err
 	}
