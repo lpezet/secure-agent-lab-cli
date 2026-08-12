@@ -324,6 +324,47 @@ first-class alternative rather than a footnote.
 - **The migration path** from the stack's `~/.config/agent-creds/` to
   `~/.config/secure-agent-lab/secrets/`.
 
+## Testing
+
+Mirror the stack repo's conventions rather than inventing new ones — a facade
+`run.sh` per tier, resources named with the PID and torn down by an `EXIT` trap
+so a run never collides with a real stack, **exit 2 for a missing prerequisite**
+so it is distinguishable from exit 1 for a failed assertion, and a tier that
+needs credentials skipping rather than failing when it has none. Do not copy
+their `lib.sh` across; the same reasoning that keeps `check-drift.sh` over there
+applies to duplicating assertions here.
+
+**Most of the assurance needs no Docker.** Assigning the lowest free `NNN` in a
+band, writing `0600`/`0700`, never emitting an `exposed: false` route into a
+generated `.conf`, recording `installed.json` accurately, detecting drift — all
+of it is a temp directory and a fake bank. `tests/fixtures/` holds that bank,
+under invented provider names so a fixture cannot quietly become the
+per-provider code the invariants test exists to catch.
+
+**The CLI surface is testscript** (`cmd/sal/testdata/script/*.txtar`), which is
+where the grammar decisions above are actually observable — a unit test cannot
+tell you that `sal observer disable` is not a command. Its `Setup` points `HOME`
+at the script's scratch directory, which is a safety property rather than
+hygiene: a test run that reached the operator's real secrets directory could
+overwrite a live credential.
+
+**A container is right for the install script, and wrong for the lab.** Testing
+`curl … | bash` across `debian:slim`, `alpine` and `ubuntu`, as root and
+non-root, catches what actually breaks — arch detection, busybox `tar`,
+`sha256sum` vs `shasum`, which PATH directory is writable — and needs no Docker
+inside the container.
+
+⚠️ **Do not test the lab lifecycle by mounting `/var/run/docker.sock` into a
+container.** It silently breaks the property under test. With the socket
+mounted, compose drives the *host* daemon, so observer publishes on the host's
+loopback while the test container has its own network namespace — `sal observer
+open` prints a URL the test cannot reach. The failure looks like a bug in `sal`,
+and the obvious "fix" is binding `0.0.0.0`, which destroys the only thing that
+makes an unauthenticated audit trail safe. It is also root-equivalent on the
+host, in the test harness of a security tool. Run the lifecycle tier against the
+host daemon in a temp directory with a unique compose project name instead —
+which is also how `sal` is actually deployed.
+
 ## What stays in the stack repo
 
 Do not port these here, even when it would be convenient:

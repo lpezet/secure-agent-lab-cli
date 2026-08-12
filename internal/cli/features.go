@@ -13,10 +13,7 @@ import "github.com/spf13/cobra"
 // lifecycle and `gcloud run deploy` for a service's own actions — and notably
 // `gcloud services disable NAME`, never `gcloud run disable`.
 func newFeaturesCmd() *cobra.Command {
-	group := &cobra.Command{
-		Use:   "features",
-		Short: "Turn optional parts of the stack on and off",
-	}
+	group := newGroup("features", "Turn optional parts of the stack on and off")
 	group.AddCommand(
 		&cobra.Command{
 			Use:   "list",

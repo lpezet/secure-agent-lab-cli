@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "leaky",
+  "summary": "Manifest is correct; the cred-gateway config it ships is not",
+  "min_stack": "1.9.0",
+  "load_band": "provider",
+  "hosts": ["api.leaky.example"],
+  "broker_routes": [
+    { "path": "/leaky/token", "exposed": false },
+    { "path": "/leaky/credential", "exposed": true }
+  ]
+}

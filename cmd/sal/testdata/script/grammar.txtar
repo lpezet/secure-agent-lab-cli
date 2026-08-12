@@ -1,0 +1,58 @@
+# The command grammar, asserted where it is actually observable.
+#
+# CLAUDE.md settles these in prose. Prose does not fail a build, so the two
+# rules that constrain future commands get pinned here instead.
+
+exec sal --help
+stdout 'providers'
+stdout 'secrets'
+stdout 'features'
+stdout 'observer'
+stdout 'labs'
+
+# Bare commands act on the lab in this directory; plural nouns act across the
+# machine. Both live at the top level, on purpose.
+stdout '^\s+up\s'
+stdout '^\s+down\s'
+stdout '^\s+init\s'
+stdout '^\s+upgrade\s'
+
+# RULE 1: lifecycle verbs are uniform, so they live in one group.
+exec sal features --help
+stdout 'enable'
+stdout 'disable'
+stdout 'list'
+
+# Which means a feature does NOT own a copy. Turning the observer off is
+# `sal features disable observer`, never `sal observer disable` — otherwise
+# there is no single place to answer "what is on?".
+! exec sal observer disable
+stderr 'unknown command "disable"'
+! exec sal observer remove
+stderr 'unknown command "remove"'
+
+# Same at the root, and inside every other group — an unknown subcommand is an
+# error everywhere, never a help page and exit 0.
+! exec sal bogus
+! exec sal providers bogus
+stderr 'unknown command "bogus"'
+! exec sal secrets bogus
+! exec sal features bogus
+! exec sal labs bogus
+
+# A bare group with no arguments IS a request for help, and that is not an
+# error.
+exec sal observer
+stdout 'Available Commands'
+
+# RULE 2: a feature earns a top-level group only when it has verbs no other
+# feature has. The observer earns one because it serves a URL and a stream.
+exec sal observer --help
+stdout 'open'
+stdout 'tail'
+
+# Positional arity is enforced rather than silently tolerated.
+! exec sal providers add
+stderr 'accepts 1 arg'
+! exec sal providers add one two
+stderr 'accepts 1 arg'

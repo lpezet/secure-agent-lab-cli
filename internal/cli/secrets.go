@@ -9,10 +9,7 @@ import "github.com/spf13/cobra"
 // parent: the parent also holds config, the install record and a bank cache,
 // none of which belongs anywhere near the broker.
 func newSecretsCmd() *cobra.Command {
-	group := &cobra.Command{
-		Use:   "secrets",
-		Short: "Store credentials for this machine's labs",
-	}
+	group := newGroup("secrets", "Store credentials for this machine's labs")
 	group.AddCommand(newSecretsSetCmd(), newSecretsListCmd())
 	return group
 }

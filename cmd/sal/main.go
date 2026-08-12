@@ -9,7 +9,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
@@ -17,14 +16,16 @@ import (
 )
 
 func main() {
-	if err := cli.Execute(); err != nil {
-		// Cobra's own usage errors are already legible; anything else gets a
-		// prefix so it is obvious which tool refused.
-		if !errors.Is(err, errQuiet) {
-			fmt.Fprintln(os.Stderr, "sal: "+err.Error())
-		}
-		os.Exit(1)
-	}
+	os.Exit(run())
 }
 
-var errQuiet = errors.New("")
+// run is main's body, split out so testscript can call it in-process. Keeping
+// the exit code as a return value rather than an os.Exit is what makes the
+// CLI's observable behaviour — stdout, stderr, status — testable at all.
+func run() int {
+	if err := cli.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, "sal: "+err.Error())
+		return 1
+	}
+	return 0
+}

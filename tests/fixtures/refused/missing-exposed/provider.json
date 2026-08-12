@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "widget",
+  "summary": "A route that does not say whether cred-gateway whitelists it",
+  "min_stack": "1.9.0",
+  "load_band": "provider",
+  "hosts": ["api.widget.example"],
+  "broker_routes": [
+    { "path": "/widget/credential", "exposed": true },
+    { "path": "/widget/token" }
+  ]
+}

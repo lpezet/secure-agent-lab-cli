@@ -1,0 +1,22 @@
+# sal --version prints BOTH versions, always.
+#
+# Contract item 5. A single number cannot answer "how far behind is my security
+# boundary?", because sal and the stack are tagged on separate lines. Printing
+# one of them would put back the ambiguity that splitting the repos removed.
+
+exec sal --version
+stdout '^sal\s+\S+'
+stdout '^stack\s+'
+
+# Outside a lab the stack version is unknown, and says so rather than
+# defaulting to something that looks like an answer.
+stdout '^stack\s+unknown'
+! stderr 'warning'
+
+# The bare `version` command is the same output.
+exec sal version
+stdout '^stack\s+unknown'
+
+# It takes no arguments.
+! exec sal version extra
+stderr 'unknown command|accepts'

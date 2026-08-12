@@ -8,10 +8,7 @@ import "github.com/spf13/cobra"
 // machine, and the plural is what stops them reading like they act on the lab
 // in the current directory the way the bare commands do.
 func newLabsCmd() *cobra.Command {
-	group := &cobra.Command{
-		Use:   "labs",
-		Short: "Act on every lab on this machine",
-	}
+	group := newGroup("labs", "Act on every lab on this machine")
 	group.AddCommand(newLabsListCmd(), newLabsDownCmd())
 	return group
 }

@@ -11,10 +11,7 @@ import "github.com/spf13/cobra"
 //
 // Turning the observer off is still `sal features disable observer`.
 func newObserverCmd() *cobra.Command {
-	group := &cobra.Command{
-		Use:   "observer",
-		Short: "Read the audit trail",
-	}
+	group := newGroup("observer", "Read the audit trail")
 	group.AddCommand(newObserverOpenCmd(), newObserverTailCmd())
 	return group
 }

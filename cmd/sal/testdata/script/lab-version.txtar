@@ -1,0 +1,26 @@
+# Inside a lab, both versions print, and the commit is shown alongside the tag.
+#
+# The commit is not decoration: a tag is mutable, so the tag alone records
+# intent rather than what was actually installed.
+
+exec sal version
+stdout '^sal\s+'
+stdout '^stack\s+v1\.9\.0 \(3ef8552aa\)'
+stdout '^lab\s+'
+! stderr 'warning'
+
+# The lab root is found by walking up, so the command works from anywhere
+# inside the project rather than only at its root.
+cd sub/deeper
+exec sal version
+stdout '^stack\s+v1\.9\.0'
+
+-- .sal/installed.json --
+{
+  "stack_tag": "v1.9.0",
+  "stack_commit": "3ef8552aa",
+  "installed": [
+    {"name": "acme", "slot": 10, "schema_version": 1, "files": ["proxy/010_acme.py"]}
+  ]
+}
+-- sub/deeper/.keep --
