@@ -60,7 +60,34 @@ type Lab struct {
 // compose project name it has to satisfy both.
 var composeName = regexp.MustCompile(`[^a-z0-9_-]+`)
 
-// NameFor derives a lab name from a project's absolute path.
+// CanonicalDir resolves a project path to the one spelling sal will use for
+// it, so that identity and the /workspace mount cannot disagree.
+//
+// Symlinks are resolved, which matters more than it looks: on macOS /tmp is a
+// link to /private/tmp and /var to /private/var, so a project reached by two
+// spellings of the same directory would otherwise get two labs — the exact
+// inverse of the collision the name hash prevents, and worse, because two live
+// labs would be injecting credentials for one project.
+//
+// A path that does not exist yet cannot be resolved, and falls back to the
+// absolute form rather than failing: callers that only want a name should not
+// need the directory to be there.
+//
+// Not handled, and worth knowing: a case-insensitive filesystem still gives
+// /p/acme and /p/ACME two names. Lowercasing the path would fix that and break
+// Linux, where those are genuinely different directories.
+func CanonicalDir(projectDir string) (string, error) {
+	abs, err := filepath.Abs(projectDir)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved, nil
+	}
+	return abs, nil
+}
+
+// NameFor derives a lab name from a project's path.
 //
 // The hash suffix is not decoration. Two projects called "api" in different
 // places must not resolve to one lab: sharing would put both behind a single
@@ -69,7 +96,7 @@ var composeName = regexp.MustCompile(`[^a-z0-9_-]+`)
 // thing one-stack-per-project exists to prevent. Deriving from the path makes
 // the collision impossible rather than unlikely.
 func NameFor(projectDir string) (string, error) {
-	abs, err := filepath.Abs(projectDir)
+	abs, err := CanonicalDir(projectDir)
 	if err != nil {
 		return "", err
 	}

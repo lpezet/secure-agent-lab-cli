@@ -60,7 +60,10 @@ func newInitCmd() *cobra.Command {
 func runInit(cmd *cobra.Command, stackTag string) error {
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 
-	projectDir, err := filepath.Abs(cwd())
+	// Canonical, not merely absolute: the same path derives the lab's identity
+	// and becomes the /workspace mount, and those two must not be able to
+	// disagree about which directory this is.
+	projectDir, err := lab.CanonicalDir(cwd())
 	if err != nil {
 		return err
 	}
