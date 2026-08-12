@@ -16,7 +16,9 @@ import (
 	"github.com/lpezet/secure-agent-lab-cli/internal/compose"
 	"github.com/lpezet/secure-agent-lab-cli/internal/config"
 	"github.com/lpezet/secure-agent-lab-cli/internal/deployment"
+	"github.com/lpezet/secure-agent-lab-cli/internal/installer"
 	"github.com/lpezet/secure-agent-lab-cli/internal/lab"
+	"github.com/lpezet/secure-agent-lab-cli/internal/prompt"
 	"github.com/lpezet/secure-agent-lab-cli/internal/version"
 )
 
@@ -119,8 +121,7 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 	// The broker mounts this. If it does not exist when the container starts,
 	// Docker creates it root-owned, and every later `sal secrets set` fails on
 	// a directory the user cannot write.
-	secretsDir, err := config.SecretsDir()
-	if err != nil {
+	if _, err := config.SecretsDir(); err != nil {
 		return err
 	}
 
@@ -147,16 +148,9 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 		return err
 	}
 
-	var rendered bytes.Buffer
-	if err := compose.Render(&rendered, compose.Data{
-		ProjectName: name,
-		ProjectDir:  projectDir,
-		SecretsDir:  secretsDir,
-		StackTag:    stackTag,
-	}); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(labDir, "compose.yaml"), rendered.Bytes(), 0o600); err != nil {
+	// The same renderer upgrade uses, so the two cannot drift apart on what a
+	// deployment's compose file should look like.
+	if err := renderCompose(&lab.Lab{Name: name, Dir: labDir, ProjectDir: projectDir}, stackTag); err != nil {
 		return err
 	}
 
@@ -395,22 +389,237 @@ func newOpenCmd() *cobra.Command {
 }
 
 func newUpgradeCmd() *cobra.Command {
-	var to string
+	var (
+		to     string
+		dryRun bool
+	)
 	cmd := &cobra.Command{
 		Use:   "upgrade",
-		Short: "Repin this lab to a newer stack release and update the files it owns",
+		Short: "Move this lab to a newer stack release and rewrite the files it owns",
 		Long: "The reason this CLI exists.\n\n" +
 			"A deployment holds its own copies of the proxy addons, broker providers and\n" +
 			"gateway configs. They are bind-mounted, so they do NOT move when the pinned\n" +
 			"release does — a lab can repin to a release containing a security fix and keep\n" +
-			"running the vulnerable file, because the fix landed in a file it owns a copy of.\n\n" +
-			"Repinning without rewriting those files is therefore not an upgrade, and this\n" +
-			"command does both.",
+			"running the vulnerable file, because the fix landed in a file it owns a copy of.\n" +
+			"Repinning without rewriting those files is therefore not an upgrade.\n\n" +
+			"So this reinstalls every recorded provider from the new release, keeping the\n" +
+			"slot each was assigned, installs the new release's own proxy addons, DELETES\n" +
+			"files the new versions no longer ship, and re-renders compose.yaml.\n\n" +
+			"Every provider is checked before anything is written, and one that cannot make\n" +
+			"the move refuses the whole upgrade. Half a deployment on each of two releases\n" +
+			"is a boundary nobody can describe.",
 		Args: cobra.NoArgs,
-		RunE: notImplemented,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runUpgrade(cmd, to, dryRun)
+		},
 	}
-	cmd.Flags().StringVar(&to, "to", "", "stack release to upgrade to (default: the newest sal knows about)")
+	cmd.Flags().StringVar(&to, "to", "", "stack release to move to (default: the newest sal knows about)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report what would change, and change nothing")
 	return cmd
+}
+
+func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
+	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+
+	l, _, err := lab.Find(cwd())
+	if err != nil {
+		return err
+	}
+	if !l.Exists() {
+		return fmt.Errorf("lab %q has no deployment at %s; run `sal init`", l.Name, l.Dir)
+	}
+	rec, err := deployment.Load(l.Dir)
+	if err != nil {
+		return err
+	}
+
+	if to == "" {
+		to = version.DefaultStack
+	}
+
+	toCommit := ""
+	if local := stackDir(cmd); local == "" {
+		toCommit, err = bank.DefaultSource().ResolveTag(cmd.Context(), to)
+		if err != nil {
+			return err
+		}
+		// A tag can move, so the commit is what says whether this is actually
+		// a change. Same tag with a different commit IS an upgrade.
+		if to == rec.StackTag && toCommit == rec.StackCommit {
+			fmt.Fprintf(errOut, "lab %s is already at %s (%s); nothing to do\n", l.Name, to, shortCommit(toCommit))
+			return nil
+		}
+	}
+
+	b, tree, err := openBank(cmd, toCommit)
+	if err != nil {
+		return err
+	}
+	defer tree.Close()
+
+	addons, err := fetchBaseAddons(cmd, toCommit)
+	if err != nil {
+		return err
+	}
+	defer addons.Close()
+
+	plan, err := installer.BuildUpgradePlan(b, addons.Dir, rec, to, toCommit)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "from     %s (%s)\n", plan.FromTag, shortCommit(plan.FromCommit))
+	fmt.Fprintf(out, "to       %s (%s)\n", plan.ToTag, shortCommit(plan.ToCommit))
+	for _, e := range plan.Entries {
+		fmt.Fprintf(out, "\nprovider %s (slot %03d, unchanged)\n", e.Plan.Manifest.Name, e.Plan.Slot)
+		for _, f := range e.Plan.Files {
+			fmt.Fprintf(out, "  rewrite %s\n", f.Dst)
+		}
+		for _, stale := range e.Stale {
+			// Worth its own word: a gateway config left behind keeps
+			// whitelisting a route the entry no longer exposes.
+			fmt.Fprintf(out, "  DELETE  %s (not shipped at %s)\n", stale, plan.ToTag)
+		}
+	}
+	if len(plan.Entries) > 0 {
+		fmt.Fprintln(out)
+	}
+	for _, a := range plan.BaseAddons {
+		fmt.Fprintf(out, "addon    %s\n", a)
+	}
+	for _, a := range plan.StaleAddons {
+		fmt.Fprintf(out, "DELETE   %s (not shipped at %s)\n", a, plan.ToTag)
+	}
+
+	if dryRun {
+		fmt.Fprintf(errOut, "\ndry run: every provider can make the move and nothing was changed\n")
+		return nil
+	}
+
+	secretsDir, err := config.SecretsDir()
+	if err != nil {
+		return err
+	}
+	values, err := collectUpgradeValues(cmd, plan, l.Dir)
+	if err != nil {
+		return err
+	}
+
+	newRec, err := plan.Apply(l.Dir, secretsDir, values)
+	if err != nil {
+		return err
+	}
+
+	// Re-render last: if anything above failed, the compose file still
+	// describes the release the files on disk came from.
+	if err := renderCompose(l, to); err != nil {
+		return err
+	}
+	if err := deployment.Save(l.Dir, newRec); err != nil {
+		return err
+	}
+	if err := lab.WritePointer(l.ProjectDir, lab.Pointer{Name: l.Name, StackTag: to}); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(errOut, "\nupgraded %s to %s\n", l.Name, to)
+	warnMissingSecrets(cmd, plan, secretsDir)
+	fmt.Fprintf(errOut, "Run `sal up --build` to rebuild the images and restart against the new release.\n"+
+		"Until then the containers are still running the old one.\n")
+	return nil
+}
+
+// renderCompose rewrites compose.yaml for a release.
+func renderCompose(l *lab.Lab, stackTag string) error {
+	secretsDir, err := config.SecretsDir()
+	if err != nil {
+		return err
+	}
+	_, labDockerfile := os.Stat(filepath.Join(l.Dir, "lab", "Dockerfile"))
+
+	var rendered bytes.Buffer
+	if err := compose.Render(&rendered, compose.Data{
+		ProjectName:   l.Name,
+		ProjectDir:    l.ProjectDir,
+		SecretsDir:    secretsDir,
+		StackTag:      stackTag,
+		LabDockerfile: labDockerfile == nil,
+	}); err != nil {
+		return err
+	}
+	return os.WriteFile(l.ComposeFile(), rendered.Bytes(), 0o600)
+}
+
+// collectUpgradeValues prompts only for config a new release added.
+//
+// Re-asking for every value an operator already set would be a good way to
+// have them paste the wrong one into a lab that was working.
+func collectUpgradeValues(cmd *cobra.Command, plan *installer.UpgradePlan, deployDir string) (map[string]installer.Values, error) {
+	needed, err := plan.NewConfig(deployDir)
+	if err != nil {
+		return nil, err
+	}
+	values := map[string]installer.Values{}
+	if len(needed) == 0 {
+		return values, nil
+	}
+
+	errOut := cmd.ErrOrStderr()
+	for _, e := range plan.Entries {
+		name := e.Plan.Manifest.Name
+		wanted := needed[name]
+		if len(wanted) == 0 {
+			continue
+		}
+		fmt.Fprintf(errOut, "\n%s at %s needs configuration it did not before:\n", name, plan.ToTag)
+
+		v := installer.Values{Config: map[string]string{}}
+		for _, c := range e.Plan.Manifest.Config {
+			if !contains(wanted, c.Env) {
+				continue
+			}
+			if c.Help != "" {
+				fmt.Fprintf(errOut, "  %s\n", c.Help)
+			}
+			answer, err := prompt.Line(c.Prompt, c.Default)
+			if err != nil {
+				return nil, err
+			}
+			v.Config[c.Env] = answer
+		}
+		values[name] = v
+	}
+	return values, nil
+}
+
+// warnMissingSecrets reports credentials a new release expects that are not on
+// disk. Not an error — the upgrade itself succeeded — but the broker will fail
+// on them at runtime, which is exactly the kind of delayed failure worth
+// naming here rather than discovering in a container log.
+func warnMissingSecrets(cmd *cobra.Command, plan *installer.UpgradePlan, secretsDir string) {
+	for _, e := range plan.Entries {
+		for _, s := range e.Plan.Manifest.Secrets {
+			if s.Optional {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(secretsDir, s.File)); err == nil {
+				continue
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"warning: %s expects %s in %s, and it is not there. The broker will fail on\n"+
+					"         it at runtime. Store it with `sal secrets set %s`.\n",
+				e.Plan.Manifest.Name, s.File, secretsDir, e.Plan.Manifest.Name)
+		}
+	}
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, h := range haystack {
+		if h == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func newDriftCmd() *cobra.Command {

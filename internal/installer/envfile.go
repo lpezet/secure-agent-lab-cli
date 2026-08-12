@@ -87,3 +87,28 @@ func envKey(line string) (string, bool) {
 	}
 	return key, true
 }
+
+// readEnvFile returns the assignments in a KEY=VALUE file. A missing file is
+// an empty set rather than an error: a virgin deployment has nothing in it.
+func readEnvFile(path string) (map[string]string, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	values := map[string]string{}
+	scan := bufio.NewScanner(bytes.NewReader(b))
+	for scan.Scan() {
+		line := scan.Text()
+		key, ok := envKey(line)
+		if !ok {
+			continue
+		}
+		_, value, _ := strings.Cut(strings.TrimSpace(line), "=")
+		values[key] = value
+	}
+	return values, scan.Err()
+}

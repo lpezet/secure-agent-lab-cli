@@ -83,37 +83,69 @@ const secretsMount = "/secrets"
 //     a declared host the addon never matches. Neither is visible in the
 //     manifest alone.
 //  4. Only then, where the files go.
-func BuildPlan(b *bank.Bank, name string, rec *deployment.Record, labStackTag string) (*Plan, error) {
+func BuildPlan(b *bank.Bank, name string, rec *deployment.Record, occupied map[int]string, labStackTag string) (*Plan, error) {
 	for _, e := range rec.Installed {
 		if e.Name == name {
 			return nil, fmt.Errorf("%q is %w (slot %03d); remove it first to reinstall", name, ErrAlreadyInstalled, e.Slot)
 		}
 	}
 
+	m, entryDir, err := prepare(b, name, labStackTag)
+	if err != nil {
+		return nil, err
+	}
+	slot, err := assignSlot(m, occupied)
+	if err != nil {
+		return nil, err
+	}
+	return assemble(m, entryDir, slot)
+}
+
+// BuildPlanAt builds a plan for an entry that is ALREADY installed, keeping
+// the slot it was assigned.
+//
+// Keeping the number is the point. The slot is the addon's filename prefix and
+// therefore its load order, and load order is a security property: the policy
+// band runs before providers for a reason. An upgrade that renumbered an addon
+// would quietly reorder the proxy's pipeline.
+func BuildPlanAt(b *bank.Bank, name string, slot int, labStackTag string) (*Plan, error) {
+	m, entryDir, err := prepare(b, name, labStackTag)
+	if err != nil {
+		return nil, err
+	}
+	if lo, hi, ok := m.LoadBand.SlotRange(); !ok || slot < lo || slot > hi {
+		return nil, fmt.Errorf(
+			"%q is installed at slot %03d but now declares the %s band (%03d-%03d); "+
+				"remove and re-add it rather than having an upgrade silently renumber it",
+			name, slot, m.LoadBand, lo, hi)
+	}
+	return assemble(m, entryDir, slot)
+}
+
+// prepare runs every check that does not depend on where the files will go.
+func prepare(b *bank.Bank, name, labStackTag string) (*manifest.Manifest, string, error) {
 	m, err := b.Manifest(name)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := m.CheckSchemaVersion(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := m.CheckMinStack(labStackTag); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-
 	entryDir, err := b.EntryDir(name)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := checkEntryConsistency(entryDir, m); err != nil {
-		return nil, err
+		return nil, "", err
 	}
+	return m, entryDir, nil
+}
 
-	slot, err := assignSlot(m, rec)
-	if err != nil {
-		return nil, err
-	}
-
+// assemble decides where every file goes, once the slot is known.
+func assemble(m *manifest.Manifest, entryDir string, slot int) (*Plan, error) {
 	p := &Plan{
 		Manifest:    m,
 		Slot:        slot,
@@ -124,11 +156,12 @@ func BuildPlan(b *bank.Bank, name string, rec *deployment.Record, labStackTag st
 
 	// The four files an entry may carry. Each is optional except in the sense
 	// that an entry with none of them installs nothing.
-	candidates := []struct {
+	type candidate struct {
 		src  string
 		dst  string
 		mode os.FileMode
-	}{
+	}
+	candidates := []candidate{
 		{filepath.Join(entryDir, brokerDir, m.Name+".js"), filepath.Join(brokerDir, m.Name+".js"), 0o644},
 		{filepath.Join(entryDir, proxyDir, m.Name+".py"), filepath.Join(proxyDir, fmt.Sprintf("%03d_%s.py", slot, m.Name)), 0o644},
 		{filepath.Join(entryDir, gatewayDir, m.Name+".conf"), filepath.Join(gatewayDir, m.Name+".conf"), 0o644},
@@ -136,28 +169,25 @@ func BuildPlan(b *bank.Bank, name string, rec *deployment.Record, labStackTag st
 	if m.LabSetup != "" {
 		// Named per entry rather than kept as setup.sh: several providers each
 		// shipping "lab/setup.sh" would otherwise overwrite one another.
-		candidates = append(candidates, struct {
-			src  string
-			dst  string
-			mode os.FileMode
-		}{filepath.Join(entryDir, filepath.FromSlash(m.LabSetup)), filepath.Join(labDir, m.Name+".sh"), 0o755})
+		candidates = append(candidates, candidate{
+			filepath.Join(entryDir, filepath.FromSlash(m.LabSetup)), filepath.Join(labDir, m.Name+".sh"), 0o755,
+		})
 	}
 
 	for _, c := range candidates {
 		if _, err := os.Stat(c.src); err != nil {
-			continue // an entry need not carry every kind of file
+			continue
 		}
 		p.Files = append(p.Files, File{Src: c.src, Dst: c.dst, Mode: c.mode})
 	}
 	if len(p.Files) == 0 {
-		return nil, fmt.Errorf("bank entry %q carries no installable files", name)
+		return nil, fmt.Errorf("bank entry %q carries no installable files", m.Name)
 	}
 
 	for _, s := range m.Secrets {
 		p.SecretEnv[s.Env] = secretsMount + "/" + s.File
 		p.SecretFiles[s.Env] = s.File
 	}
-
 	return p, nil
 }
 
@@ -272,30 +302,37 @@ func quotedIn(body, host string) bool {
 // Both sources are consulted: what the record says is installed, and what is
 // actually on disk. They should agree, and if a stray addon file exists that
 // the record does not know about, taking its number would silently shadow it.
-func assignSlot(m *manifest.Manifest, rec *deployment.Record) (int, error) {
+func assignSlot(m *manifest.Manifest, occupied map[int]string) (int, error) {
 	lo, hi, ok := m.LoadBand.SlotRange()
 	if !ok {
 		return 0, fmt.Errorf("manifest declares unknown load_band %q", m.LoadBand)
 	}
-
-	used := rec.UsedSlots()
 	for n := lo; n <= hi; n++ {
-		if _, taken := used[n]; !taken {
+		if _, taken := occupied[n]; !taken {
 			return n, nil
 		}
 	}
-	return 0, fmt.Errorf("no free slot in the %s band (%03d-%03d); %d already installed", m.LoadBand, lo, hi, len(used))
+	return 0, fmt.Errorf("no free slot in the %s band (%03d-%03d); %d already occupied", m.LoadBand, lo, hi, len(occupied))
 }
 
-// ObserveOnDiskSlots folds the numbers of any addon files already present into
-// a record's view, so a file the record does not mention still cannot have its
-// number reused.
-func ObserveOnDiskSlots(deployDir string, rec *deployment.Record) {
+// OccupiedSlots reports which addon numbers are taken, from the record and
+// from the files actually on disk.
+//
+// It returns a set rather than adding to the record, and that distinction is
+// not cosmetic: an earlier version appended what it found to rec.Installed,
+// and the caller then saved that record — writing the stack's own proxy addons
+// into installed.json as if they were bank entries named "policy" and
+// "allowlist". check-drift.sh reads that field to decide which entries a
+// deployment claims, so a healthy lab reported drift forever, and `upgrade`
+// refused because those entries are not in any bank. A function that reads
+// state must not quietly write it.
+func OccupiedSlots(deployDir string, rec *deployment.Record) map[int]string {
+	occupied := rec.UsedSlots()
+
 	entries, err := os.ReadDir(filepath.Join(deployDir, proxyDir))
 	if err != nil {
-		return
+		return occupied
 	}
-	known := rec.UsedSlots()
 	for _, e := range entries {
 		name := e.Name()
 		if len(name) < 4 || !strings.HasSuffix(name, ".py") {
@@ -305,14 +342,11 @@ func ObserveOnDiskSlots(deployDir string, rec *deployment.Record) {
 		if _, err := fmt.Sscanf(name[:3], "%d", &n); err != nil {
 			continue
 		}
-		if _, ok := known[n]; ok {
-			continue
+		if _, ok := occupied[n]; !ok {
+			occupied[n] = name
 		}
-		rec.Installed = append(rec.Installed, deployment.Entry{
-			Name: strings.TrimSuffix(name[4:], ".py"),
-			Slot: n,
-		})
 	}
+	return occupied
 }
 
 func plural(n int, one, many string) string {
