@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/lpezet/secure-agent-lab-cli/internal/config"
+	"github.com/lpezet/secure-agent-lab-cli/internal/schema"
 )
 
 // PointerDir is the directory a project keeps its pointer in, and PointerFile
@@ -44,6 +45,11 @@ var ErrNoLab = errors.New("no lab for this directory (no " + PointerDir + "/" + 
 // Deliberately free of absolute paths so it can be committed: it names the lab
 // and the release, and nothing about the machine it was created on.
 type Pointer struct {
+	// SchemaVersion is the generation of this file's format. It is committed
+	// into a user's git history, so a later sal meeting an older file — or an
+	// older sal meeting a newer one — must be able to tell rather than guess.
+	SchemaVersion int `json:"schema_version"`
+
 	Name     string `json:"name"`
 	StackTag string `json:"stack_tag"`
 }
@@ -139,6 +145,9 @@ func Find(start string) (*Lab, *Pointer, error) {
 			if err := json.Unmarshal(b, &p); err != nil {
 				return nil, nil, fmt.Errorf("%s: %w", path, err)
 			}
+			if err := schema.Check("lab pointer", p.SchemaVersion, path); err != nil {
+				return nil, nil, err
+			}
 			if p.Name == "" {
 				return nil, nil, fmt.Errorf("%s names no lab", path)
 			}
@@ -184,6 +193,7 @@ func (l *Lab) ComposeFile() string { return filepath.Join(l.Dir, "compose.yaml")
 
 // WritePointer writes <project>/.sal/lab.json.
 func WritePointer(projectDir string, p Pointer) error {
+	p.SchemaVersion = schema.Current
 	dir := filepath.Join(projectDir, PointerDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

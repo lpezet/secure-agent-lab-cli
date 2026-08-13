@@ -35,16 +35,17 @@ stdout '^stack\s+v1\.9\.0'
 stderr 'project asks for stack v2\.0\.0 but its lab was built from v1\.9\.0'
 
 -- project/.sal/lab.json --
-{"name": "demo-lab", "stack_tag": "v1.9.0"}
+{"schema_version": 1, "name": "demo-lab", "stack_tag": "v1.9.0"}
 -- project/sub/deeper/.keep --
 -- orphan/.sal/lab.json --
-{"name": "missing-lab", "stack_tag": "v1.9.0"}
+{"schema_version": 1, "name": "missing-lab", "stack_tag": "v1.9.0"}
 -- disagreeing/.sal/lab.json --
-{"name": "demo-lab", "stack_tag": "v2.0.0"}
+{"schema_version": 1, "name": "demo-lab", "stack_tag": "v2.0.0"}
 -- .config/secure-agent-lab/labs/demo-lab/compose.yaml --
 name: demo-lab
 -- .config/secure-agent-lab/labs/demo-lab/.sal/installed.json --
 {
+  "schema_version": 1,
   "stack_tag": "v1.9.0",
   "stack_commit": "3ef8552aa",
   "installed": []

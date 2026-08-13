@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/lpezet/secure-agent-lab-cli/internal/schema"
 )
 
 // Dir is the record's directory inside a deployment, RecordFile the record.
@@ -33,6 +35,12 @@ var ErrNoRecord = errors.New("deployment has no " + Dir + "/" + RecordFile)
 
 // Record is the contents of .sal/installed.json.
 type Record struct {
+	// SchemaVersion is the generation of this file's format. Required, and
+	// refused when above what this build supports — see internal/schema. This
+	// file is read by check-drift.sh in the stack repo, so its shape is a
+	// contract with another repository, not just with a later sal.
+	SchemaVersion int `json:"schema_version"`
+
 	// StackTag is the release this deployment is pinned to, in tag spelling.
 	StackTag string `json:"stack_tag"`
 
@@ -96,11 +104,15 @@ func Load(deployDir string) (*Record, error) {
 	if err := json.Unmarshal(b, &rec); err != nil {
 		return nil, fmt.Errorf("%s: %w", Path(deployDir), err)
 	}
+	if err := schema.Check("install record", rec.SchemaVersion, Path(deployDir)); err != nil {
+		return nil, err
+	}
 	return &rec, nil
 }
 
 // Save writes the record, creating .sal/ if needed.
 func Save(deployDir string, rec *Record) error {
+	rec.SchemaVersion = schema.Current
 	if err := os.MkdirAll(filepath.Join(deployDir, Dir), 0o700); err != nil {
 		return err
 	}
