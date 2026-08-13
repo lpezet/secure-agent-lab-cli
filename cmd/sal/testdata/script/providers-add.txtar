@@ -60,17 +60,18 @@ stderr 'already installed'
 stderr 'remove it first'
 
 -- project/.sal/lab.json --
-{"name": "demo-lab", "stack_tag": "v1.9.0"}
+{"schema_version": 1, "name": "demo-lab", "stack_tag": "v1.9.0"}
 -- stocked/.sal/lab.json --
-{"name": "stocked-lab", "stack_tag": "v1.9.0"}
+{"schema_version": 1, "name": "stocked-lab", "stack_tag": "v1.9.0"}
 -- .config/secure-agent-lab/labs/demo-lab/compose.yaml --
 name: demo-lab
 -- .config/secure-agent-lab/labs/demo-lab/.sal/installed.json --
-{"stack_tag": "v1.9.0", "installed": []}
+{"schema_version": 1, "stack_tag": "v1.9.0", "installed": []}
 -- .config/secure-agent-lab/labs/stocked-lab/compose.yaml --
 name: stocked-lab
 -- .config/secure-agent-lab/labs/stocked-lab/.sal/installed.json --
 {
+  "schema_version": 1,
   "stack_tag": "v1.9.0",
   "installed": [{"name": "acme", "slot": 10, "schema_version": 1, "files": ["proxy/010_acme.py"]}]
 }

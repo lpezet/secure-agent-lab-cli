@@ -68,9 +68,9 @@ stderr 'sal providers remove'
 grep '"stack_tag": "v1.9.0"' $WORK/.config/secure-agent-lab/labs/blocked-lab/.sal/installed.json
 
 -- project/.sal/lab.json --
-{"name": "demo-lab", "stack_tag": "v1.9.0"}
+{"schema_version": 1, "name": "demo-lab", "stack_tag": "v1.9.0"}
 -- blocked/.sal/lab.json --
-{"name": "blocked-lab", "stack_tag": "v1.9.0"}
+{"schema_version": 1, "name": "blocked-lab", "stack_tag": "v1.9.0"}
 -- .config/secure-agent-lab/labs/demo-lab/compose.yaml --
 name: demo-lab
 services:
@@ -78,6 +78,7 @@ services:
     build: https://github.com/lpezet/secure-agent-lab.git#v1.9.0:stack/broker
 -- .config/secure-agent-lab/labs/demo-lab/.sal/installed.json --
 {
+  "schema_version": 1,
   "stack_tag": "v1.9.0",
   "base_addons": ["000_policy.py", "002_retired.py"],
   "installed": [
@@ -106,6 +107,7 @@ ACME_REGION=us-east-1
 name: blocked-lab
 -- .config/secure-agent-lab/labs/blocked-lab/.sal/installed.json --
 {
+  "schema_version": 1,
   "stack_tag": "v1.9.0",
   "base_addons": ["000_policy.py"],
   "installed": [

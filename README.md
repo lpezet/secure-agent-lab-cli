@@ -21,8 +21,8 @@ what `sal` is for; everything else it does is secondary.
 ## Install
 
 ```
-curl -fsSL https://github.com/lpezet/secure-agent-lab-cli/install | bash
-curl -fsSL https://github.com/lpezet/secure-agent-lab-cli/install | bash -s "v1.2.0"
+curl -fsSL https://raw.githubusercontent.com/lpezet/secure-agent-lab-cli/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lpezet/secure-agent-lab-cli/main/install.sh | bash -s v0.1.0
 ```
 
 The version there pins **the binary, not the lab**. The stack release a project
@@ -30,9 +30,11 @@ runs is pinned per-project and moved by `sal upgrade`. Keeping those on separate
 lines is deliberate: if the install command also pinned the stack, upgrading
 your CLI would silently move everyone's security boundary.
 
-Piping a script into a shell to install a security tool is a look, so:
-clone-and-inspect is a supported path, every release ships `checksums.txt`
-signed with cosign, and the install script is short enough to read first.
+Piping a script into a shell to install a security tool is a look, so: the
+script verifies the checksum **before** extracting anything, verifies the
+cosign signature over it when cosign is on PATH and says so plainly when it is
+not, and is short enough to read first. Clone-and-inspect is a supported path,
+not a footnote.
 
 ```
 git clone https://github.com/lpezet/secure-agent-lab-cli

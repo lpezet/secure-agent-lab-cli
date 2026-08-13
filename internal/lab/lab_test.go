@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/lpezet/secure-agent-lab-cli/internal/schema"
 )
 
 // composeProjectName is what Docker Compose accepts. A name that fails this
@@ -133,7 +135,7 @@ func TestFindWalksUp(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	project := t.TempDir()
-	writePointer(t, project, `{"name": "demo-lab", "stack_tag": "v1.9.0"}`)
+	writePointer(t, project, `{"schema_version": 1, "name": "demo-lab", "stack_tag": "v1.9.0"}`)
 
 	deep := filepath.Join(project, "src", "pkg", "inner")
 	if err := os.MkdirAll(deep, 0o755); err != nil {
@@ -173,12 +175,12 @@ func TestFindWithoutPointer(t *testing.T) {
 // would let a repo decide where sal reads a deployment from.
 func TestFindRejectsUntrustworthyPointers(t *testing.T) {
 	cases := map[string]string{
-		"traversal":      `{"name": "../../../etc", "stack_tag": "v1.9.0"}`,
-		"nested path":    `{"name": "a/b", "stack_tag": "v1.9.0"}`,
-		"parent":         `{"name": "..", "stack_tag": "v1.9.0"}`,
-		"absolute":       `{"name": "/etc/passwd", "stack_tag": "v1.9.0"}`,
-		"empty name":     `{"stack_tag": "v1.9.0"}`,
-		"malformed json": `{"name": `,
+		"traversal":      `{"schema_version": 1, "name": "../../../etc", "stack_tag": "v1.9.0"}`,
+		"nested path":    `{"schema_version": 1, "name": "a/b", "stack_tag": "v1.9.0"}`,
+		"parent":         `{"schema_version": 1, "name": "..", "stack_tag": "v1.9.0"}`,
+		"absolute":       `{"schema_version": 1, "name": "/etc/passwd", "stack_tag": "v1.9.0"}`,
+		"empty name":     `{"schema_version": 1, "stack_tag": "v1.9.0"}`,
+		"malformed json": `{"schema_version": 1, "name": `,
 	}
 
 	for label, contents := range cases {
@@ -198,6 +200,22 @@ func TestFindRejectsUntrustworthyPointers(t *testing.T) {
 	}
 }
 
+// A pointer written before the format carried a generation is refused rather
+// than assumed to be the oldest one.
+func TestFindRefusesAnUnversionedPointer(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	project := t.TempDir()
+	writePointer(t, project, `{"name": "demo-lab", "stack_tag": "v1.9.0"}`)
+
+	_, _, err := Find(project)
+	if err == nil {
+		t.Fatal("want a refusal for a pointer with no schema_version")
+	}
+	if errors.Is(err, ErrNoLab) {
+		t.Errorf("an unversioned pointer is not an absent one: %v", err)
+	}
+}
+
 func TestWritePointerRoundTrips(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	project := t.TempDir()
@@ -206,6 +224,8 @@ func TestWritePointerRoundTrips(t *testing.T) {
 	if err := WritePointer(project, want); err != nil {
 		t.Fatal(err)
 	}
+	// WritePointer stamps the generation it writes, so that is what comes back.
+	want.SchemaVersion = schema.Current
 
 	_, got, err := Find(project)
 	if err != nil {
@@ -261,7 +281,7 @@ func TestPointerCarriesNoMachineDetail(t *testing.T) {
 func TestExistsTracksTheComposeFile(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	project := t.TempDir()
-	writePointer(t, project, `{"name": "demo-lab", "stack_tag": "v1.9.0"}`)
+	writePointer(t, project, `{"schema_version": 1, "name": "demo-lab", "stack_tag": "v1.9.0"}`)
 
 	l, _, err := Find(project)
 	if err != nil {

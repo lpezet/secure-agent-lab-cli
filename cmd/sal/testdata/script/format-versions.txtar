@@ -1,0 +1,50 @@
+# The two files sal writes that outlive the build which wrote them carry a
+# schema_version, and a generation this build does not understand is REFUSED.
+#
+# Same rule the stack adopted for bank manifests, for stronger reasons: one of
+# these is read by check-drift.sh in the stack repo, and the other is committed
+# into a user's git history.
+
+# A pointer from a future sal is refused rather than read for the parts this
+# build happens to recognise.
+cd future-pointer
+! exec sal version
+stderr 'lab pointer'
+stderr 'generation 99'
+stderr 'upgrade sal'
+
+# So is one that predates the field: guessing which generation it is would make
+# the guess permanent.
+cd ../unversioned-pointer
+! exec sal version
+stderr 'lab pointer'
+stderr 'predates'
+
+# The install record gets the same treatment. It is read by check-drift.sh in
+# the stack repo, so its shape is a contract with another repository.
+cd ../future-record
+! exec sal providers list
+stderr 'install record'
+stderr 'generation 99'
+
+cd ../unversioned-record
+! exec sal providers list
+stderr 'install record'
+stderr 'predates'
+
+-- future-pointer/.sal/lab.json --
+{"schema_version": 99, "name": "demo-lab", "stack_tag": "v1.9.0"}
+-- unversioned-pointer/.sal/lab.json --
+{"name": "demo-lab", "stack_tag": "v1.9.0"}
+-- future-record/.sal/lab.json --
+{"schema_version": 1, "name": "future-lab", "stack_tag": "v1.9.0"}
+-- unversioned-record/.sal/lab.json --
+{"schema_version": 1, "name": "unversioned-lab", "stack_tag": "v1.9.0"}
+-- .config/secure-agent-lab/labs/future-lab/compose.yaml --
+name: future-lab
+-- .config/secure-agent-lab/labs/future-lab/.sal/installed.json --
+{"schema_version": 99, "stack_tag": "v1.9.0", "installed": []}
+-- .config/secure-agent-lab/labs/unversioned-lab/compose.yaml --
+name: unversioned-lab
+-- .config/secure-agent-lab/labs/unversioned-lab/.sal/installed.json --
+{"stack_tag": "v1.9.0", "installed": []}
