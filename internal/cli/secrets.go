@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
@@ -39,12 +40,16 @@ func newSecretsCmd() *cobra.Command {
 func newSecretsSetCmd() *cobra.Command {
 	var fromFile, stack string
 	cmd := &cobra.Command{
-		Use:   "set PROVIDER [SECRET]",
+		Use:   "set PROVIDER [FILE]",
 		Short: "Store a credential, read from the terminal with echo off",
 		Long: "Walks the credentials the provider's manifest declares, prompting with the\n" +
-			"bank author's own words. A provider declaring one credential needs no SECRET\n" +
-			"argument; one declaring several takes the env name it lists, or any\n" +
-			"unambiguous part of it.\n\n" +
+			"bank author's own words. With no FILE it asks for every one of them; with a\n" +
+			"FILE it sets that one.\n\n" +
+			"A credential is named by its FILE — the name `sal secrets list` prints and\n" +
+			"the name on disk — never by the environment variable the manifest pairs it\n" +
+			"with. That variable is what the BROKER reads, and its value is a path inside\n" +
+			"the container, so it names neither the credential nor anywhere you can put\n" +
+			"one. Naming one gets you told which file it means.\n\n" +
 			"The value is read from the terminal with echo off, and a non-terminal stdin is\n" +
 			"refused rather than read. There is no flag to pass the value, and there will\n" +
 			"not be one: an argv is in shell history, in ps, and in any process listing the\n" +
@@ -146,9 +151,9 @@ func runSecretsSet(cmd *cobra.Command, provider, selector, fromFile, stack strin
 		}
 		if len(value) == 0 {
 			if !s.Optional {
-				return fmt.Errorf("%s is required", s.Env)
+				return fmt.Errorf("%s is required", s.File)
 			}
-			fmt.Fprintf(errOut, "left %s unset (optional)\n", s.Env)
+			fmt.Fprintf(errOut, "left %s unset (optional)\n", s.File)
 			continue
 		}
 
@@ -193,7 +198,7 @@ func readSecretValue(cmd *cobra.Command, s manifest.Secret, fromFile string) ([]
 		return ref.Read()
 	}
 
-	return prompt.ReadSecret(s.Prompt, s.Multiline, fileHook(cmd, s.File))
+	return prompt.ReadSecret(s.Prompt, s.File, s.Multiline, fileHook(cmd, s.File))
 }
 
 // fileHook implements the "did you mean this file?" question.
@@ -252,39 +257,60 @@ func noteLooseSource(w io.Writer, ref *secrets.FileRef) {
 // anthropic` asks for the OAuth token and then the API key, in the manifest's
 // order, with the manifest's wording.
 //
-// A selector matches the env name exactly, or unambiguously as a
-// case-insensitive substring. Ambiguity is REFUSED rather than resolved:
-// guessing wrong writes an OAuth token into the file the broker sends as
-// x-api-key, and that failure is invisible until a request is rejected.
+// A selector is a credential's FILE, spelled exactly. Not its env var, and not
+// any part of either — see refuseByEnv for why the env name is refused with an
+// explanation rather than simply not matching.
+//
+// Exact-only is the point, not a limitation. Validate rejects a manifest whose
+// secrets share a `file`, so an exact match on a unique field is unambiguous
+// BY CONSTRUCTION and there is no tie to break. An earlier version matched
+// substrings and refused ambiguity, which worked but put the riskiest decision
+// in this file behind a heuristic: resolving a tie wrong writes a token into
+// the file the broker reads as an API key, silently at install and visibly
+// only when a request is rejected. Now there is nothing to resolve.
 func selectSecrets(m *manifest.Manifest, selector string) ([]manifest.Secret, error) {
 	if selector == "" {
 		return m.Secrets, nil
 	}
 
-	var matches []manifest.Secret
 	for _, s := range m.Secrets {
-		if strings.EqualFold(s.Env, selector) {
+		// EqualFold rather than ==, and safe because Validate compares files
+		// case-insensitively too, so two that differ only in case cannot both
+		// be declared.
+		if strings.EqualFold(s.File, selector) {
 			return []manifest.Secret{s}, nil
 		}
-		if strings.Contains(strings.ToLower(s.Env), strings.ToLower(selector)) {
-			matches = append(matches, s)
-		}
 	}
-
-	switch len(matches) {
-	case 1:
-		return matches, nil
-	case 0:
-		return nil, fmt.Errorf("%s declares no credential matching %q:\n%s", m.Name, selector, secretMenu(m))
-	}
-	return nil, fmt.Errorf("%q matches %d of %s's credentials; name one exactly:\n%s",
-		selector, len(matches), m.Name, secretMenu(m))
+	return nil, refuseByEnv(m, selector)
 }
 
+// refuseByEnv builds the refusal for a selector that named no credential.
+//
+// The env name gets its own message. Someone who read a deployment's .env and
+// reasoned backwards will type ANTHROPIC_AUTH_TOKEN_PATH, and "no credential
+// matching …" would tell them the credential does not exist — worse than the
+// confusion that made this the file's job in the first place. Four things wear
+// that one name: the env var, its value (a path INSIDE the container), the
+// host file, and the credential itself. Only the last is what they have.
+func refuseByEnv(m *manifest.Manifest, selector string) error {
+	for _, s := range m.Secrets {
+		if strings.EqualFold(s.Env, selector) {
+			return fmt.Errorf(
+				"%s is the environment variable the broker reads, and its value is a path inside the container.\n"+
+					"You are setting the credential itself — name it by its file:\n  %s — %s",
+				s.Env, s.File, s.Prompt)
+		}
+	}
+	return fmt.Errorf("%s declares no credential named %q; name one of:\n%s", m.Name, selector, secretMenu(m))
+}
+
+// secretMenu lists the credentials by the name used to select them, paired
+// with the manifest's own wording — the same two columns the interactive
+// prompt shows, so what is read is what is typed.
 func secretMenu(m *manifest.Manifest) string {
 	var b strings.Builder
 	for _, s := range m.Secrets {
-		fmt.Fprintf(&b, "  %s — %s\n", s.Env, s.Prompt)
+		fmt.Fprintf(&b, "  %s — %s\n", s.File, s.Prompt)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -326,9 +352,19 @@ func runSecretsList(cmd *cobra.Command, provider, stack string) error {
 			continue
 		}
 		fmt.Fprintf(out, "%s\n", m.Name)
+		// Keyed by file, and the env var is deliberately absent. It is the
+		// name the broker reads and the one an operator must NOT learn to
+		// type — its value is a path inside a container, not the credential —
+		// so listing it here would teach exactly the vocabulary the selector
+		// gave up. The mapping still lives in the manifest and the .env.
+		w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 		for _, s := range m.Secrets {
 			claimed[s.File] = true
-			fmt.Fprintf(out, "  %s\n    %s\n", s.Env, describeState(store.Stat(s.File), s))
+			fmt.Fprintf(w, "  %s\t%s\n", s.File, describeState(store.Stat(s.File), s))
+			fmt.Fprintf(w, "  \t%s\n", s.Prompt)
+		}
+		if err := w.Flush(); err != nil {
+			return err
 		}
 		fmt.Fprintln(out)
 	}
@@ -348,8 +384,12 @@ func runSecretsList(cmd *cobra.Command, provider, stack string) error {
 	}
 	if len(orphans) > 0 {
 		fmt.Fprintf(out, "claimed by no installed provider:\n")
+		w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 		for _, f := range orphans {
-			fmt.Fprintf(out, "  %s — %s\n", f, describeState(store.Stat(f), manifest.Secret{}))
+			fmt.Fprintf(w, "  %s\t%s\n", f, describeState(store.Stat(f), manifest.Secret{}))
+		}
+		if err := w.Flush(); err != nil {
+			return err
 		}
 		fmt.Fprintf(out, "\nEach of these is mounted into every broker on this machine. Delete what\nis no longer used, or install the provider that reads it.\n")
 	}
@@ -363,7 +403,7 @@ func describeState(st secrets.State, s manifest.Secret) string {
 		}
 		return "not set"
 	}
-	line := fmt.Sprintf("set — %s, %04o, modified %s", st.File, st.Mode.Perm(), st.Modified.Format("2006-01-02 15:04"))
+	line := fmt.Sprintf("set — %04o, modified %s", st.Mode.Perm(), st.Modified.Format("2006-01-02 15:04"))
 	if st.Loose() {
 		line += "  ← readable by other users; `sal secrets set` rewrites it 0600"
 	}

@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/lpezet/secure-agent-lab-cli/internal/stackver"
@@ -222,6 +223,30 @@ func (m *Manifest) Validate() error {
 		}
 	}
 
+	// Two declarations must never write to one name. The schema cannot say so
+	// — uniqueness across array items is not something a closed field set
+	// expresses — so it is checked here.
+	//
+	// This is not tidiness. `file` is how an operator NAMES a credential
+	// (`sal secrets set anthropic anthropic-auth.token`), so a duplicate would
+	// make one of them unaddressable, and whichever was prompted for second
+	// would silently overwrite the first. A duplicate `env` is the same bug in
+	// the deployment's .env, where the second value wins and the first
+	// provider route reads a credential meant for another.
+	seenFile := map[string]int{}
+	seenEnv := map[string]int{}
+	dup := func(seen map[string]int, key, what string, i int) {
+		key = strings.ToLower(key)
+		if key == "" {
+			return
+		}
+		if first, ok := seen[key]; ok {
+			bad("%s is declared twice, at index %d and %d; two declarations cannot share one %s", what, first, i, what)
+			return
+		}
+		seen[key] = i
+	}
+
 	for i, s := range m.Secrets {
 		if !envPat.MatchString(s.Env) {
 			bad("secrets[%d].env %q does not match %s", i, s.Env, envPat)
@@ -232,6 +257,10 @@ func (m *Manifest) Validate() error {
 		if s.Prompt == "" {
 			bad("secrets[%d].prompt is required", i)
 		}
+		// Lowercased, so a manifest that would be unambiguous on Linux and
+		// collide on a case-insensitive filesystem is caught in both places.
+		dup(seenFile, s.File, "secrets[].file "+strconv.Quote(s.File), i)
+		dup(seenEnv, s.Env, "env "+strconv.Quote(s.Env), i)
 	}
 	for i, c := range m.Config {
 		if !envPat.MatchString(c.Env) {
@@ -240,6 +269,10 @@ func (m *Manifest) Validate() error {
 		if c.Prompt == "" {
 			bad("config[%d].prompt is required", i)
 		}
+		// Shares the secrets' env namespace on purpose: both end up in the
+		// same .env, so a config that reuses a secret's name would overwrite
+		// the path to a credential with a literal.
+		dup(seenEnv, c.Env, "env "+strconv.Quote(c.Env), i)
 	}
 	for k := range m.LabEnv {
 		if !envPat.MatchString(k) {

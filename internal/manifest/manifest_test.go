@@ -195,3 +195,69 @@ func TestBandSlotRanges(t *testing.T) {
 		t.Error("unknown band should not resolve to a range")
 	}
 }
+
+// Two declarations must never write to one name. The schema cannot express
+// uniqueness across array items, so Validate does.
+//
+// This is what makes `sal secrets set <provider> <file>` total: the selector is
+// an EXACT match on `file`, so uniqueness is what removes every tie there is to
+// break. Without it, one of two credentials sharing a file would be
+// unaddressable, and whichever was prompted for second would silently overwrite
+// the first.
+func TestValidateRejectsDuplicateNames(t *testing.T) {
+	cases := map[string]struct {
+		insert string
+		want   string
+	}{
+		"duplicate file": {
+			`{"env": "ACME_KEY_PATH", "file": "acme.pem", "prompt": "A"},
+             {"env": "ACME_OTHER_PATH", "file": "acme.pem", "prompt": "B"}`,
+			"file",
+		},
+		// Case-insensitively, because a manifest that is unambiguous on Linux
+		// and collides on a case-insensitive filesystem must fail in both.
+		"duplicate file, different case": {
+			`{"env": "ACME_KEY_PATH", "file": "acme.pem", "prompt": "A"},
+             {"env": "ACME_OTHER_PATH", "file": "ACME.PEM", "prompt": "B"}`,
+			"file",
+		},
+		// The same bug one layer along: both land in the deployment's .env,
+		// where the second wins and the first route reads the wrong path.
+		"duplicate env across secrets": {
+			`{"env": "ACME_KEY_PATH", "file": "a.pem", "prompt": "A"},
+             {"env": "ACME_KEY_PATH", "file": "b.pem", "prompt": "B"}`,
+			"env",
+		},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			in := strings.Replace(validManifest,
+				`{"env": "ACME_KEY_PATH", "file": "acme.pem", "prompt": "ACME private key", "multiline": true}`,
+				c.insert, 1)
+			if in == validManifest {
+				t.Fatal("fixture no longer contains the secret being replaced")
+			}
+			_, err := decode(t, in)
+			if err == nil {
+				t.Fatal("want a refusal for a manifest that declares one name twice")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error should name the field, got: %v", err)
+			}
+		})
+	}
+}
+
+// A secret and a config sharing an env name is the same collision: config is
+// written into the same .env, so it would replace the path to a credential
+// with a literal.
+func TestValidateRejectsAConfigThatShadowsASecret(t *testing.T) {
+	in := strings.Replace(validManifest, `"env": "ACME_APP_ID"`, `"env": "ACME_KEY_PATH"`, 1)
+	if in == validManifest {
+		t.Fatal("fixture no longer contains the config env")
+	}
+	if _, err := decode(t, in); err == nil {
+		t.Fatal("want a refusal when a config reuses a secret's env name")
+	}
+}

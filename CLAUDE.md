@@ -342,6 +342,19 @@ ground non-interactively, and is not an exception to the never-in-argv rule — 
 *path* in an argv reveals nothing, while a *value* in an argv is the whole
 problem. A pipe is still refused, because a pipe is an argv one process upstream.
 
+**A credential is named by its `file`, exactly — never by its `env`.** The env
+var is what the *broker* reads and its value is a path *inside the container*,
+so `ANTHROPIC_AUTH_TOKEN_PATH` names neither the credential nor anywhere the
+operator can put one; `anthropic-auth.token` is what they see in
+`sal secrets list` and on disk. Because `Validate` refuses a manifest whose
+secrets share a `file`, an exact match on it is unambiguous **by construction**
+— which is the real prize, since it removes every tie-breaking path from the
+one decision in this CLI that fails silently when it goes wrong. An exact `env`
+name is still refused *with an explanation* rather than a "no such credential",
+because someone who typed it read a deployment's `.env` and reasoned backwards.
+No operator-facing message names a credential any other way — not the prompt,
+not the listing, not the skip line.
+
 **`multiline` picks the default, never the destination.** The manifest's
 `multiline` flag exists to choose a prompt widget, and it does three jobs, all
 consistent with that: it selects the paste-vs-path default, it decides whether
@@ -373,6 +386,7 @@ keeps `init` and `info` alongside `gcloud storage`.
 sal providers add cloudflare
 sal providers create telegram --template rest-bearer
 sal secrets set anthropic
+sal secrets set anthropic anthropic-auth.token
 sal secrets set github --from-file ~/Downloads/app.private-key.pem
 sal secrets list
 sal features list

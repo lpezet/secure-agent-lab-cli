@@ -39,73 +39,79 @@ func TestSelectSecretsWithoutASelectorWalksThemAll(t *testing.T) {
 	}
 }
 
-func TestSelectSecretsByName(t *testing.T) {
-	cases := map[string]string{
-		"exact":        "ACME_API_KEY_PATH",
-		"any case":     "acme_api_key_path",
-		"a unique bit": "api_key",
-		"shorter":      "API",
-	}
-
-	for label, selector := range cases {
+// A credential is named by its FILE. That name is self-explanatory in a way
+// the env var is not, it is what `sal secrets list` prints, and it is what
+// exists on disk.
+func TestSelectSecretsByFile(t *testing.T) {
+	for label, selector := range map[string]string{
+		"as declared": "acme.key",
+		"any case":    "ACME.KEY",
+	} {
 		t.Run(label, func(t *testing.T) {
 			got, err := selectSecrets(twoSecrets(), selector)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(got) != 1 || got[0].Env != "ACME_API_KEY_PATH" {
+			if len(got) != 1 || got[0].File != "acme.key" {
 				t.Fatalf("selector %q chose %+v", selector, got)
 			}
 		})
 	}
 }
 
-// The property that matters most in this file. An ambiguous selector must be
-// REFUSED, never resolved: picking wrong writes an OAuth token into the file
-// the broker sends as an API key, and nothing reports that until a request is
-// rejected — by which time the credential is stored, the lab is running, and
-// the failure looks like a bad token rather than a misfiled one.
-func TestSelectSecretsRefusesAmbiguity(t *testing.T) {
-	_, err := selectSecrets(twoSecrets(), "ACME")
-	if err == nil {
-		t.Fatal("an ambiguous selector was resolved instead of refused")
-	}
-	// And the refusal has to be actionable, or it just moves the guessing to
-	// the operator.
-	for _, want := range []string{"ACME_AUTH_TOKEN_PATH", "ACME_API_KEY_PATH"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error does not list %s:\n%v", want, err)
-		}
+// Exact only. Every one of these named a real credential under the previous
+// substring matcher, and each is now a refusal — because exactness is what
+// makes the match unambiguous by construction rather than by tie-breaking.
+func TestSelectSecretsIsExactOnly(t *testing.T) {
+	for label, selector := range map[string]string{
+		"a substring":        "auth",
+		"without extension":  "acme-auth",
+		"a different suffix": "acme-auth.tok",
+		"a superstring":      "acme-auth.token.bak",
+	} {
+		t.Run(label, func(t *testing.T) {
+			if got, err := selectSecrets(twoSecrets(), selector); err == nil {
+				t.Fatalf("selector %q chose %+v, want a refusal", selector, got)
+			}
+		})
 	}
 }
 
-// An exact match wins outright, so a full env name that happens to be a
-// substring of another is never ambiguous.
-func TestSelectSecretsPrefersAnExactMatch(t *testing.T) {
-	m := &manifest.Manifest{
-		Name: "acme",
-		Secrets: []manifest.Secret{
-			{Env: "ACME_KEY", File: "a.key", Prompt: "short"},
-			{Env: "ACME_KEY_SECONDARY", File: "b.key", Prompt: "long"},
-		},
+// The env name must not work — it is the thing that started this — but "no
+// credential named …" would say the credential does not exist, which is worse
+// than the confusion it replaced. Someone typing it has read a deployment's
+// .env and reasoned backwards, so the refusal points at the right name.
+func TestSelectSecretsExplainsTheEnvName(t *testing.T) {
+	_, err := selectSecrets(twoSecrets(), "ACME_AUTH_TOKEN_PATH")
+	if err == nil {
+		t.Fatal("the env name was accepted as a selector")
 	}
-
-	got, err := selectSecrets(m, "ACME_KEY")
-	if err != nil {
-		t.Fatal(err)
+	for _, want := range []string{
+		"environment variable",  // what it actually is
+		"path inside the conta", // and why its value is not what they have
+		"acme-auth.token",       // the name that does work
+		"Acme OAuth token",      // in the manifest's own words
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal is missing %q:\n%v", want, err)
+		}
 	}
-	if len(got) != 1 || got[0].Env != "ACME_KEY" {
-		t.Fatalf("chose %+v, want the exact match", got)
+	// The message must point at the ONE credential they meant, not list both.
+	if strings.Contains(err.Error(), "acme.key") {
+		t.Errorf("the refusal names the other credential too, which is noise:\n%v", err)
 	}
 }
 
 func TestSelectSecretsRejectsAnUnknownName(t *testing.T) {
-	_, err := selectSecrets(twoSecrets(), "NOPE")
+	_, err := selectSecrets(twoSecrets(), "nosuchthing")
 	if err == nil {
 		t.Fatal("an unknown selector was accepted")
 	}
-	if !strings.Contains(err.Error(), "ACME_AUTH_TOKEN_PATH") {
-		t.Errorf("the error should show what IS available:\n%v", err)
+	// An unrecognised name shows what IS available, in both columns.
+	for _, want := range []string{"acme-auth.token", "acme.key", "Acme OAuth token"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error should show what is available; missing %q:\n%v", want, err)
+		}
 	}
 }
 
@@ -126,13 +132,20 @@ func TestSelectSecretsWithASingleCredential(t *testing.T) {
 	}
 }
 
-// The menu is what turns a refusal into something the operator can act on, so
-// it carries the manifest's own wording rather than just the env names.
-func TestSecretMenuCarriesTheManifestsPrompts(t *testing.T) {
+// The menu is what turns a refusal into something the operator can act on. It
+// pairs the selector with the manifest's wording — the same two columns the
+// interactive prompt shows, so what is read is what is typed.
+func TestSecretMenuPairsFileWithPrompt(t *testing.T) {
 	menu := secretMenu(twoSecrets())
-	for _, want := range []string{"ACME_AUTH_TOKEN_PATH", "Acme OAuth token", "ACME_API_KEY_PATH", "Acme API key"} {
+	for _, want := range []string{"acme-auth.token", "Acme OAuth token", "acme.key", "Acme API key"} {
 		if !strings.Contains(menu, want) {
 			t.Errorf("menu is missing %q:\n%s", want, menu)
+		}
+	}
+	// The env names are what the operator must NOT learn to type.
+	for _, unwanted := range []string{"ACME_AUTH_TOKEN_PATH", "ACME_API_KEY_PATH"} {
+		if strings.Contains(menu, unwanted) {
+			t.Errorf("menu shows %q, which is the name this change exists to stop teaching:\n%s", unwanted, menu)
 		}
 	}
 }
