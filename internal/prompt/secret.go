@@ -26,20 +26,42 @@ import (
 var ErrNotATerminal = errors.New(
 	"refusing to read a credential from a pipe: stdin is not a terminal, and a piped value is an argv one process away")
 
+// FileHook is given the first line of what was typed, before any more of it is
+// read, and answers whether that line named a file the operator meant to copy.
+//
+// It exists so that this package stays about terminal I/O while the policy —
+// what counts as a path, what to ask, what to refuse — lives in
+// internal/secrets, where it can be tested without a terminal.
+//
+// The first line is enough to decide on, in both directions: a path contains
+// no newline, and a pasted PEM's first line is `-----BEGIN …`, which names no
+// file. Consulting it before reading the rest is what lets a path be given at
+// a multiline prompt without the blank-line ritual.
+type FileHook func(firstLine []byte) (value []byte, used bool, err error)
+
 // ReadSecret prompts and reads a credential with echo off.
 //
 // A multiline value — a PEM, say — is terminated by a blank line rather than
 // EOF, because a terminal in no-echo mode gives no feedback that a paste
 // landed and Ctrl-D behaves differently across the shells this has to work in.
-func ReadSecret(label string, multiline bool) ([]byte, error) {
+//
+// hook may be nil. When it is not, what was typed may name a file instead of
+// being the credential, and the operator is asked which they meant — so this
+// returns either what they typed or what that file holds.
+func ReadSecret(label string, multiline bool, hook FileHook) ([]byte, error) {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
 		return nil, ErrNotATerminal
 	}
 
-	if multiline {
+	switch {
+	case multiline && hook != nil:
+		fmt.Fprintf(os.Stderr, "%s\n  paste it, then a blank line to finish — or give the path to a file holding it\n", label)
+	case multiline:
 		fmt.Fprintf(os.Stderr, "%s (paste, then a blank line to finish):\n", label)
-	} else {
+	case hook != nil:
+		fmt.Fprintf(os.Stderr, "%s\n  paste the value, or the path to a file holding it\n> ", label)
+	default:
 		fmt.Fprintf(os.Stderr, "%s: ", label)
 	}
 
@@ -49,7 +71,13 @@ func ReadSecret(label string, multiline bool) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		return trimEOL(value), nil
+		value = trimEOL(value)
+		if hook != nil {
+			if fromFile, used, err := hook(value); err != nil || used {
+				return fromFile, err
+			}
+		}
+		return value, nil
 	}
 
 	var lines []string
@@ -64,6 +92,19 @@ func ReadSecret(label string, multiline bool) ([]byte, error) {
 		}
 		if len(trimEOL(line)) == 0 {
 			break
+		}
+		// Only the first line can be a path, and it is checked before the
+		// loop asks for a second one — otherwise someone giving a path here
+		// would sit at a prompt with no indication it had already been read.
+		if hook != nil && len(lines) == 0 {
+			fmt.Fprintln(os.Stderr)
+			fromFile, used, err := hook(trimEOL(line))
+			if err != nil {
+				return nil, err
+			}
+			if used {
+				return fromFile, nil
+			}
 		}
 		lines = append(lines, string(trimEOL(line)))
 	}

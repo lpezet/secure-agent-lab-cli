@@ -8,36 +8,8 @@ import (
 	"time"
 
 	"github.com/lpezet/secure-agent-lab-cli/internal/deployment"
+	"github.com/lpezet/secure-agent-lab-cli/internal/secrets"
 )
-
-// SecretPerm is the mode every credential file must have.
-const SecretPerm os.FileMode = 0o600
-
-// EnsureSecretMode tightens a credential file that is more permissive than
-// SecretPerm, reporting whether it had to.
-//
-// This exists because of the path that does NOT write: a credential already
-// present is reused rather than re-prompted, and reuse skipped the mode
-// entirely — so a file that arrived at 0644, by hand or from an older tool,
-// stayed 0644 forever while every install reported success. The enclosing
-// directory is 0700, so the exposure is limited, but "limited" is not the
-// property the stack's own docs promise for these files.
-//
-// Only tightens. A file at 0400 is stricter than required and is left alone.
-func EnsureSecretMode(path string) (bool, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false, err
-	}
-	perm := info.Mode().Perm()
-	if perm&^SecretPerm == 0 {
-		return false, nil
-	}
-	if err := os.Chmod(path, perm&SecretPerm); err != nil {
-		return false, err
-	}
-	return true, nil
-}
 
 // Values are what the operator supplied for a plan's prompts.
 type Values struct {
@@ -64,11 +36,11 @@ func (p *Plan) Apply(deployDir, secretsDir, stackTag string, v Values) (*deploym
 			return nil, fmt.Errorf("no secret named %s in this plan", env)
 		}
 		dst := filepath.Join(secretsDir, file)
-		if err := os.WriteFile(dst, value, SecretPerm); err != nil {
+		if err := os.WriteFile(dst, value, secrets.Perm); err != nil {
 			return nil, err
 		}
 		// WriteFile does not chmod a file that already existed.
-		if _, err := EnsureSecretMode(dst); err != nil {
+		if _, err := secrets.EnsureMode(dst); err != nil {
 			return nil, err
 		}
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/lpezet/secure-agent-lab-cli/internal/lab"
 	"github.com/lpezet/secure-agent-lab-cli/internal/manifest"
 	"github.com/lpezet/secure-agent-lab-cli/internal/prompt"
+	"github.com/lpezet/secure-agent-lab-cli/internal/secrets"
 )
 
 // newProvidersCmd builds the `sal providers` group.
@@ -304,7 +305,7 @@ func collectValues(cmd *cobra.Command, plan *installer.Plan, secretsDir string) 
 			// Reuse skips the write, so it would also skip the mode. A
 			// credential that arrived at 0644 by some other route must not
 			// stay that way just because sal did not create it.
-			tightened, err := installer.EnsureSecretMode(path)
+			tightened, err := secrets.EnsureMode(path)
 			if err != nil {
 				return v, err
 			}
@@ -314,7 +315,11 @@ func collectValues(cmd *cobra.Command, plan *installer.Plan, secretsDir string) 
 			continue
 		}
 
-		value, err := prompt.ReadSecret(s.Prompt, s.Multiline)
+		// Same prompt as `sal secrets set`, including the option to give a path
+		// instead of pasting. Installing a provider is where most credentials
+		// arrive, so it would be the wrong place to make the operator paste a
+		// PEM by hand.
+		value, err := prompt.ReadSecret(s.Prompt, s.Multiline, fileHook(cmd, s.File))
 		if err != nil {
 			return v, err
 		}
@@ -325,7 +330,7 @@ func collectValues(cmd *cobra.Command, plan *installer.Plan, secretsDir string) 
 			}
 			return v, fmt.Errorf("%s is required", s.Env)
 		}
-		v.Secrets[s.Env] = value
+		v.Secrets[s.Env] = secrets.Normalize(value, s.Multiline)
 	}
 
 	for _, c := range plan.Manifest.Config {

@@ -286,24 +286,82 @@ TTY with echo off. An argv is in shell history, in `ps`, and in any process
 listing the agent can run. Same rule for anything that shells out.
 
 **Mount `secrets/`, never its parent.** The consolidated location is
-`~/.config/secure-agent-lab/secrets/` (replacing the stack's current
-`~/.config/agent-creds/` — needs a migration path). That parent will also hold
-config, the install manifest and probably a bank cache; none of it belongs in
-the broker. `0700` on the directory, `0600` on files.
+`~/.config/secure-agent-lab/secrets/`, replacing the stack's current
+`~/.config/agent-creds/`. That parent also holds every lab on the machine, and
+none of that belongs in the broker. `0700` on the directory, `0600` on files.
 
-**Record a credential's kind, never re-derive it later.** Anthropic has two
-genuinely different credentials: an OAuth token (`sk-ant-oat01-`) tied to a
-Claude subscription, sent as `Authorization: Bearer`, and an API key
-(`sk-ant-api03-`) tied to a Console org, billed per token, sent as `x-api-key`.
-Different auth systems, different revocation, different wire format.
+**There is no migration from `~/.config/agent-creds/`, deliberately.** Nobody is
+known to be running the stack yet, so the population it would serve is empty —
+and moving credentials is the operation with the worst failure mode in this
+repo. Someone who does have an old directory re-enters each credential with
+`sal secrets set`, which is a better exercise of the command than a code path
+tested against nothing. `config.LegacySecretsDir` stays as a named constant so
+the old location can be *reported* without anything being moved.
 
-`sal` needs almost no machinery for this, because the broker already encodes the
-answer in the *filename*: it reads `ANTHROPIC_AUTH_TOKEN_PATH` first and falls
-back to `ANTHROPIC_API_KEY_PATH`, deriving the type from which it found. So
-`sal secrets set` only chooses a destination filename. Offer
-`--type oauth|api-key`, default to detecting from the prefix, but **write the
-decision down** — guessing a credential's kind from its shape later is the same
-vendor-shape bet the stack's audit-leak suite exists to pin down.
+**Never inspect a credential's contents to choose a destination.** The
+destination comes out of the manifest — the `file` on the secret the bank entry
+declares — and nothing else. This is the no-per-provider-code rule one level
+further in, and it fails worse when broken: a wrong guess writes a credential
+into the file the broker reads for a *different* one, which is silent at
+install and surfaces much later as a rejected request nobody traces back.
+
+The temptation is real, so it is worth naming what it looks like. Anthropic has
+two genuinely different credentials: an OAuth token (`…oat01-`) tied to a Claude
+subscription, sent as `Authorization: Bearer`, and an API key (`…api03-`) tied
+to a Console org, sent as `x-api-key`. Different auth systems, different
+revocation, different wire format — and `sal` could "just know" which prefix
+means which file. It must not. An earlier draft of this document proposed
+`--type oauth|api-key` for exactly that, which was vendor knowledge wearing a
+flag's clothes.
+
+**The bank already answers it, and better.** A provider with two credential
+kinds declares two `secrets`, each with its own `env`, its own `file` and its
+own `prompt`. Which one the operator meant is settled by *which prompt they
+answered*, and recorded by *which file exists* — the broker reads
+`ANTHROPIC_AUTH_TOKEN_PATH` first and falls back to `ANTHROPIC_API_KEY_PATH`,
+so the filename **is** the record. Nothing is derived, so nothing can be
+mis-derived. `sal secrets set anthropic` walks the array and prints the bank
+author's own words, including their precedence rule, without this CLI having
+heard of either credential.
+
+`internal/invariants` holds the guard: no vendor credential shape may appear as
+a string literal in this repo's source, listed in
+`testdata/credential-shapes.txt`.
+
+**What the rule does NOT forbid.** `sal` does read a credential — to write it to
+a file — and `internal/secrets.ResolveFile` stats what the operator typed to ask
+whether they meant a path. Neither picks a destination, and the second is
+confirmed by a human before anything is copied. The line is *destination*, not
+*contact*.
+
+That confirmation earns its place on the failure it catches, which is the one
+that is currently silent: someone pasting `~/Downloads/key.pem` into a prompt
+that asked for a key. Without the check, `sal` writes thirty-four bytes of path
+into the credential file and reports success. `--from-file` covers the same
+ground non-interactively, and is not an exception to the never-in-argv rule — a
+*path* in an argv reveals nothing, while a *value* in an argv is the whole
+problem. A pipe is still refused, because a pipe is an argv one process upstream.
+
+**`multiline` picks the default, never the destination.** The manifest's
+`multiline` flag exists to choose a prompt widget, and it does three jobs, all
+consistent with that: it selects the paste-vs-path default, it decides whether
+the read terminates on a blank line, and it decides whether the stored value is
+trimmed. That last one is load-bearing — a token read out of a file carries the
+newline an editor left, and passing it through produces `Authorization: Bearer
+sk-…\n`, an invalid header that surfaces as a 401 long after anyone is watching.
+A PEM's trailing newline is part of the file and must survive. Getting a default
+wrong costs one keystroke; getting a destination wrong is unrecoverable, which
+is why only the first is inferred.
+
+**Adding a manifest field is a generation event, not an additive change.** The
+schema is `additionalProperties: false` and this CLI implements that as
+`json.Decoder.DisallowUnknownFields()`, so a bank entry carrying a new optional
+field makes every older `sal` fail to decode it *at all* rather than ignore it.
+The bank therefore cannot extend `secrets[]` — or anything else — without
+bumping `schema_version`, which contract item 4 says should happen on the order
+of never. The bar for a new field is that the CLI cannot do a correct job
+without it. "The interactive prompt should know a value lives in a file" did not
+clear it: `multiline` already discriminates well enough to pick a default.
 
 ## Command grammar
 
@@ -315,6 +373,8 @@ keeps `init` and `info` alongside `gcloud storage`.
 sal providers add cloudflare
 sal providers create telegram --template rest-bearer
 sal secrets set anthropic
+sal secrets set github --from-file ~/Downloads/app.private-key.pem
+sal secrets list
 sal features list
 sal features enable observer
 sal features disable observer
@@ -457,8 +517,6 @@ first-class alternative rather than a footnote.
 
 - **What `sal open` does when the current directory already has a
   `.devcontainer`.**
-- **The migration path** from the stack's `~/.config/agent-creds/` to
-  `~/.config/secure-agent-lab/secrets/`.
 
 ## Testing
 
