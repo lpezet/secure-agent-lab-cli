@@ -11,9 +11,10 @@
 // when a command needs it and thrown away after, so everything under this
 // directory is state worth keeping.
 //
-// Mount `secrets/`, never its parent. The parent holds a bank cache and will
-// hold config besides; none of that belongs in the broker's filesystem, and a
-// parent mount would put it there the moment anything new is added.
+// Mount `secrets/`, never its parent. The parent holds every lab on this
+// machine and will hold config besides; none of that belongs in the broker's
+// filesystem, and a parent mount would put it there the moment anything new is
+// added.
 package config
 
 import (
@@ -25,16 +26,21 @@ import (
 // appDir is the directory name under the user's config root.
 const appDir = "secure-agent-lab"
 
-// LegacySecretsDir is where the stack currently keeps credentials. sal does not
-// read or migrate it yet; it is named here so the migration has something to
-// refer to rather than a string typed twice.
+// LegacySecretsDir is where the stack currently keeps credentials.
+//
+// sal does not move anything out of it, and that is settled rather than
+// pending: moving credentials is the worst-failing operation in this repo, and
+// the population it would serve is empty. Someone with an old directory
+// re-enters each credential with `sal secrets set`. This constant exists so the
+// old location can be REPORTED without a string being typed twice.
 const LegacySecretsDir = "agent-creds"
 
 // Dir returns the consolidated config directory, creating it 0700 if absent.
 //
-// 0700 on the parent as well as on secrets/ because the bank cache determines
-// what gets installed into a lab. A cache another user can write to is a way to
-// choose the code that ends up behind the credential boundary.
+// 0700 on the parent as well as on secrets/ because the labs under it hold the
+// proxy addons, broker providers and gateway configs a lab runs. A deployment
+// another user can write to is a way to choose the code that ends up behind the
+// credential boundary.
 func Dir() (string, error) {
 	root, err := configRoot()
 	if err != nil {

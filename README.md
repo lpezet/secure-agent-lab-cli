@@ -4,8 +4,11 @@ A CLI over [secure-agent-lab](https://github.com/lpezet/secure-agent-lab) — th
 Docker stack that runs autonomous agents without exposing long-lived
 credentials to the agent's process.
 
-> **Status: early.** The command tree, the manifest reader and the invariant
-> tests are in place; the commands themselves are stubs that exit non-zero.
+> **Status: early, and pre-1.0 honestly.** `init`, `up`, `down`, `upgrade`,
+> `providers add|list` and `secrets set|list` work against a real stack.
+> `open`, `drift`, `features`, `observer` and `labs` are still stubs that exit
+> non-zero — deliberately, since a stub returning 0 would let a script believe
+> a credential was stored.
 
 ## What it is for
 
@@ -51,7 +54,8 @@ sal drift                    report files that differ from the pinned release
 
 sal providers add NAME       install a bank entry
 sal providers create NAME    scaffold a new one
-sal secrets set NAME         store a credential, read from the terminal with echo off
+sal secrets set PROVIDER     store a credential, read from the terminal with echo off
+sal secrets list             what is stored, what is loose, what nothing claims
 sal features enable NAME     lifecycle verbs, uniform across every feature
 sal observer open | tail     read the audit trail
 sal labs list                what is running on this machine with credentials attached
@@ -66,6 +70,14 @@ for widening its own allowlist.
 
 **A forgotten lab is not idle.** It is a live credential-injecting proxy with
 the secrets directory mounted. That is what `sal labs list` is for.
+
+**`sal` knows nothing about any provider, including its credentials.**
+`sal secrets set anthropic` asks for an OAuth token and then an API key, in that
+precedence, using the bank author's own wording — because the manifest declares
+both, each with its own destination file. No flag names a vendor's credential
+kinds and no code reads a value's prefix to decide where it goes; a wrong guess
+there would file a credential under the wrong one silently. `internal/invariants`
+fails the build if a vendor credential shape ever appears in this repo's source.
 
 ## Development
 
