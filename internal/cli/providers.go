@@ -319,16 +319,16 @@ func collectValues(cmd *cobra.Command, plan *installer.Plan, secretsDir string) 
 		// instead of pasting. Installing a provider is where most credentials
 		// arrive, so it would be the wrong place to make the operator paste a
 		// PEM by hand.
-		value, err := prompt.ReadSecret(s.Prompt, s.Multiline, fileHook(cmd, s.File))
+		value, err := prompt.ReadSecret(s.Prompt, s.File, s.Multiline, fileHook(cmd, s.File))
 		if err != nil {
 			return v, err
 		}
 		if len(value) == 0 {
 			if s.Optional {
-				fmt.Fprintf(errOut, "skipped %s (optional)\n", s.Env)
+				fmt.Fprintf(errOut, "skipped %s (optional)\n", s.File)
 				continue
 			}
-			return v, fmt.Errorf("%s is required", s.Env)
+			return v, fmt.Errorf("%s is required", s.File)
 		}
 		v.Secrets[s.Env] = secrets.Normalize(value, s.Multiline)
 	}

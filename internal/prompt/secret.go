@@ -48,22 +48,30 @@ type FileHook func(firstLine []byte) (value []byte, used bool, err error)
 // hook may be nil. When it is not, what was typed may name a file instead of
 // being the credential, and the operator is asked which they meant — so this
 // returns either what they typed or what that file holds.
-func ReadSecret(label string, multiline bool, hook FileHook) ([]byte, error) {
+//
+// dest is the credential's filename, shown as "stored as <dest>". It does two
+// jobs: it says which of a provider's credentials this prompt is asking for,
+// when walking several, and it teaches the name that selects this one
+// individually later. "stored as" rather than a bare filename because the very
+// next clause offers a path as valid input, and the two would otherwise blur
+// into "type this filename".
+func ReadSecret(label, dest string, multiline bool, hook FileHook) ([]byte, error) {
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
 		return nil, ErrNotATerminal
 	}
 
-	switch {
-	case multiline && hook != nil:
-		fmt.Fprintf(os.Stderr, "%s\n  paste it, then a blank line to finish — or give the path to a file holding it\n", label)
-	case multiline:
-		fmt.Fprintf(os.Stderr, "%s (paste, then a blank line to finish):\n", label)
-	case hook != nil:
-		fmt.Fprintf(os.Stderr, "%s\n  paste the value, or the path to a file holding it\n> ", label)
-	default:
-		fmt.Fprintf(os.Stderr, "%s: ", label)
+	source := "paste the value"
+	if multiline {
+		source = "paste it, then a blank line to finish"
 	}
+	if hook != nil {
+		source += ", or the path to a file holding it"
+	}
+	if dest != "" {
+		source = "stored as " + dest + " — " + source
+	}
+	fmt.Fprintf(os.Stderr, "%s\n  %s\n> ", label, source)
 
 	if !multiline {
 		value, err := term.ReadPassword(fd)
