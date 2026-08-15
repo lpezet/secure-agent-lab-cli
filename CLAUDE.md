@@ -174,6 +174,31 @@ with the secrets directory mounted. `sal labs list` is the answer to "what is
 currently running with my credentials attached", which makes it a control rather
 than a convenience.
 
+`sal labs down <name>` is the other half of it, and the half that has to exist:
+the labs most worth stopping are the ones `list` just reported as having no
+project left, and `sal down` cannot reach those — it finds a lab *from* a
+project, which is exactly what is missing. Names are spelled exactly, for the
+same reason a credential is: two projects called `api` are what the hash suffix
+exists to keep apart, so a prefix would be ambiguous precisely where it matters.
+
+**`labs down` has no `--volumes`, though `sal down` does.** That flag deletes a
+lab's audit trail — the record of everything the agent did through it — and
+across a whole machine that is not an operation with a safe shape. Deleting one
+trail is a decision; deleting every trail is one decision applied to things the
+operator was not thinking about. `sal down --volumes` per project makes them
+visit each. Stopping, by contrast, is reversible, so `labs down` does not prompt
+at all — a confirmation on a reversible action only teaches people to clear
+prompts.
+
+**One lab that will not stop does not abandon the rest**, which is the opposite
+of `upgrade`'s all-or-nothing rule and not an inconsistency. A partial upgrade
+leaves half a deployment on each of two releases, a boundary nobody can
+describe. A partial `down` just leaves fewer labs running — and aborting would
+leave *more* of them up, which is the opposite of what was asked for. The exit
+status is still non-zero, and the "of which were running" count only counts labs
+that actually stopped: a lab that refused is still live, and counting it would
+report the reverse of what happened.
+
 **Never assign a host port. Ask Docker for it.** Publish observer as
 `127.0.0.1::9000` — empty host port, Docker assigns — then read the assignment
 back with `docker compose -p <project> port observer 9000`. Collisions become
@@ -447,6 +472,8 @@ sal features disable observer
 sal observer open
 sal observer tail
 sal labs list
+sal labs down api-3f2a1b0c
+sal labs down --all
 sal open
 ```
 

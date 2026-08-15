@@ -57,13 +57,181 @@ func newLabsListCmd() *cobra.Command {
 func newLabsDownCmd() *cobra.Command {
 	var all bool
 	cmd := &cobra.Command{
-		Use:   "down",
-		Short: "Stop labs across this machine",
-		Args:  cobra.ArbitraryArgs,
-		RunE:  notImplemented,
+		Use:   "down [NAME...]",
+		Short: "Stop labs anywhere on this machine, by name",
+		Long: "The other half of `sal labs list`. That command finds a lab running for a\n" +
+			"project that was deleted; this is what stops it — `sal down` cannot, because\n" +
+			"it needs a project to find the lab from, and that is exactly what is missing.\n\n" +
+			"Takes lab names, spelled exactly as `sal labs list` prints them, or --all.\n" +
+			"Never both, and never neither: a bare `sal labs down` that stopped everything\n" +
+			"would be a machine-wide action nobody typed.\n\n" +
+			"There is deliberately no --volumes here, though `sal down` has one. That flag\n" +
+			"deletes a lab's audit trail — the record of everything the agent did — and\n" +
+			"across a whole machine that is not an operation with a safe shape. Deleting\n" +
+			"one trail is a decision; deleting every trail is a decision made once and\n" +
+			"applied to things the operator was not thinking about. Run `sal down --volumes`\n" +
+			"per project, which makes you visit each one.\n\n" +
+			"Stopping is reversible, so this does not prompt. It does print what it is\n" +
+			"about to stop, and which of those were live.",
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runLabsDown(cmd, args, all)
+		},
 	}
-	cmd.Flags().BoolVar(&all, "all", false, "stop every running lab on this machine")
+	cmd.Flags().BoolVar(&all, "all", false, "stop every lab on this machine that Docker knows about")
 	return cmd
+}
+
+func runLabsDown(cmd *cobra.Command, names []string, all bool) error {
+	errOut := cmd.ErrOrStderr()
+
+	switch {
+	case all && len(names) > 0:
+		return errors.New("--all already names every lab; pass names or --all, not both")
+	case !all && len(names) == 0:
+		return errors.New("name a lab to stop, or pass --all; `sal labs list` prints the names.\n" +
+			"To stop the lab for the project you are in, `sal down` is the shorter way")
+	}
+
+	labs, err := lab.All()
+	if err != nil {
+		return err
+	}
+
+	// Unlike `labs list`, an unreachable Docker is fatal here. That command
+	// still has an inventory to report from the filesystem; this one has
+	// nothing to do without a daemon, and asking once beats the same exec
+	// failure repeated per lab.
+	state, err := dockerState(cmd.Context())
+	if err != nil {
+		return err
+	}
+
+	targets, err := selectLabs(labs, names, all, state)
+	if err != nil {
+		return err
+	}
+	if len(targets) == 0 {
+		fmt.Fprintf(errOut, "nothing to stop: Docker knows of no containers for any lab on this machine\n")
+		reportUnknownProjects(errOut, rootOf(labs), state, namesOf(labs))
+		return nil
+	}
+
+	// Each lab is stopped independently, and one that fails does not stop the
+	// rest. This is the opposite of `sal upgrade`, where a partial run leaves
+	// half a deployment on each of two releases — here a partial run just
+	// leaves fewer labs running, and refusing to continue would leave MORE of
+	// them up, which is the opposite of what was asked for.
+	var failed []string
+	stopped, wereRunning := 0, 0
+	for _, l := range targets {
+		p, known := state[l.Name]
+		fmt.Fprintf(errOut, "\nstopping %s (%s)\n", l.Name, statusOf(p, known))
+
+		r := &compose.Runner{File: l.ComposeFile(), Stdout: cmd.OutOrStdout(), Stderr: errOut}
+		if err := r.Run(cmd.Context(), "down"); err != nil {
+			fmt.Fprintf(errOut, "%s: %v\n", l.Name, err)
+			failed = append(failed, l.Name)
+			continue
+		}
+		stopped++
+		// Counted only on success, and the distinction is the point of the
+		// number: it says how many live credential paths were closed. A lab
+		// that refused to stop is still running, and counting it here would
+		// report the opposite of what happened.
+		if p.Running() {
+			wereRunning++
+		}
+	}
+
+	fmt.Fprintf(errOut, "\nstopped %s", plural(stopped, "lab"))
+	if wereRunning > 0 {
+		// The number that matters: each of these was a live
+		// credential-injecting proxy with the secrets directory mounted.
+		fmt.Fprintf(errOut, ", %d of which %s running", wereRunning, was(wereRunning))
+	}
+	fmt.Fprintln(errOut, ".")
+
+	if len(failed) > 0 {
+		return fmt.Errorf("%s would not stop: %s", plural(len(failed), "lab"), strings.Join(failed, ", "))
+	}
+	return nil
+}
+
+// selectLabs turns names or --all into the deployments to act on.
+//
+// A name must be spelled exactly, for the same reason a credential must be:
+// two projects called `api` are precisely what the hash suffix exists to keep
+// apart, so prefix matching would be ambiguous exactly where it matters. The
+// names are copyable out of `sal labs list`.
+func selectLabs(labs []*lab.Lab, names []string, all bool, state map[string]compose.Project) ([]*lab.Lab, error) {
+	byName := make(map[string]*lab.Lab, len(labs))
+	for _, l := range labs {
+		byName[l.Name] = l
+	}
+
+	if all {
+		// Every lab Docker has containers for, running or merely present —
+		// `down` removes both, and a lab that exited still has container
+		// objects to clear. Labs Docker has never heard of are skipped because
+		// there is genuinely nothing to do for them.
+		var targets []*lab.Lab
+		for _, l := range labs {
+			if _, known := state[l.Name]; known {
+				targets = append(targets, l)
+			}
+		}
+		return targets, nil
+	}
+
+	var targets []*lab.Lab
+	for _, name := range names {
+		l, ok := byName[name]
+		if !ok {
+			return nil, fmt.Errorf("no lab named %q on this machine; `sal labs list` prints the names", name)
+		}
+		if !l.Exists() {
+			// Nothing to drive compose with. `sal labs list` reports this
+			// directory as not a deployment, and if containers ARE up under
+			// that name it says so there too.
+			return nil, fmt.Errorf("lab %q has no compose file at %s, so there is nothing to stop it with", name, l.Dir)
+		}
+		targets = append(targets, l)
+	}
+	return targets, nil
+}
+
+func statusOf(p compose.Project, known bool) string {
+	if !known {
+		return "not started"
+	}
+	return p.Status
+}
+
+func namesOf(labs []*lab.Lab) map[string]bool {
+	known := make(map[string]bool, len(labs))
+	for _, l := range labs {
+		known[l.Name] = true
+	}
+	return known
+}
+
+func rootOf(labs []*lab.Lab) string {
+	if len(labs) > 0 {
+		return filepath.Dir(labs[0].Dir)
+	}
+	root, err := config.LabsDir()
+	if err != nil {
+		return ""
+	}
+	return root
+}
+
+func was(n int) string {
+	if n == 1 {
+		return "was"
+	}
+	return "were"
 }
 
 func runLabsList(cmd *cobra.Command) error {
@@ -234,9 +402,12 @@ func summarise(w io.Writer, labs []*lab.Lab, running int, state map[string]compo
 	// Stated only when it is true of something, and stated precisely: the
 	// broker mounts the whole secrets directory, and what reaches the agent is
 	// narrower than that — only the routes its installed providers expose.
+	// `sal labs down` and not only `sal down`, because the labs most worth
+	// stopping are the ones this command just reported as having no project
+	// left — and `sal down` needs a project to find the lab from.
 	fmt.Fprintf(w, "\nEach running lab mounts the whole secrets directory into its broker, and hands\n"+
-		"the agent only what its installed providers expose. Stop one with `sal down`\n"+
-		"in its project.\n")
+		"the agent only what its installed providers expose. Stop one with\n"+
+		"`sal labs down <name>`, or `sal down` from inside its project.\n")
 }
 
 // reportUnknownProjects names compose projects running out of the labs

@@ -1,0 +1,56 @@
+#!/bin/sh
+# A fake `docker` for the txtar scripts that exercise sal's Docker-facing
+# commands. Put it first on PATH:
+#
+#   env PATH=$FIXTURES/fake-docker:$PATH
+#
+# Why this exists rather than real containers: the two findings `sal labs list`
+# is FOR — a lab that is running, and a compose project running out of the labs
+# directory with no deployment behind it — cannot be produced by starting real
+# containers in a test, and the second is not a state anything should be able
+# to create on purpose. This makes both deterministic while still exercising
+# sal's real exec path and its real JSON decode, rather than a seam cut into
+# the production code for tests.
+#
+# It covers exactly the three invocations sal makes:
+#
+#   docker compose version                    availability check
+#   docker compose ls --all --format json     state of every project
+#   docker compose -f FILE VERB...            one deployment
+#
+# Controlled by environment:
+#
+#   FAKE_DOCKER_BROKEN   non-zero exit for `version`, i.e. no usable daemon
+#   FAKE_DOCKER_LS       file holding the JSON for `ls`; @LABS@ in it is
+#                        replaced with the real labs directory, because a txtar
+#                        file section cannot hold $WORK and the paths have to
+#                        be real for the under-the-labs-directory check to mean
+#                        anything
+#   FAKE_DOCKER_LOG      appended with "VERB FILE" for every -f invocation, so
+#                        a script can assert which labs were acted on
+#   FAKE_DOCKER_FAIL     compose files containing this substring exit 1, for
+#                        testing that one failure does not abandon the rest
+
+[ "$1" = compose ] || exit 1
+
+case "$2" in
+version)
+	exit "${FAKE_DOCKER_BROKEN:-0}"
+	;;
+ls)
+	sed "s|@LABS@|$WORK/.config/secure-agent-lab/labs|g" "$FAKE_DOCKER_LS"
+	;;
+-f)
+	file=$3
+	verb=$4
+	[ -n "$FAKE_DOCKER_LOG" ] && echo "$verb $file" >>"$FAKE_DOCKER_LOG"
+	if [ -n "$FAKE_DOCKER_FAIL" ] && [ "${file#*"$FAKE_DOCKER_FAIL"}" != "$file" ]; then
+		echo "fake docker: refusing $file" >&2
+		exit 1
+	fi
+	echo "fake docker: compose $verb $file"
+	;;
+*)
+	exit 1
+	;;
+esac

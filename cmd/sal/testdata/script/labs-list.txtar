@@ -1,7 +1,7 @@
 # `sal labs list` answers "what is currently running with my credentials
 # attached?", which is why it is a control and not a listing.
 #
-# Docker is faked with a /bin/sh script placed first on PATH. That is not a
+# Docker is faked with tests/fixtures/fake-docker first on PATH. That is not a
 # shortcut around the real thing — it is the only way to make the two answers
 # that matter deterministic: a lab that is RUNNING, and a compose project
 # running out of the labs directory that no deployment there accounts for.
@@ -10,8 +10,7 @@
 
 [windows] skip 'the fake docker is a /bin/sh script'
 
-env PATH=$WORK/bin:$PATH
-chmod 0755 bin/docker
+env PATH=$FIXTURES/fake-docker:$PATH
 env FAKE_DOCKER_LS=$WORK/nothing.json
 
 # An empty machine says so rather than printing an empty table. This runs
@@ -139,21 +138,6 @@ stderr 'docker compose -p <name> down'
 # somebody else's business, and reporting them would make the warning noise.
 ! stderr 'someone-elses-app'
 
--- bin/docker --
-#!/bin/sh
-# Stands in for `docker compose` in labs-list.txtar. Two subcommands, which is
-# all `sal labs list` uses: `version` for the availability check and `ls` for
-# the state of every project.
-#
-# The sed is because a txtar file section cannot hold $WORK, and the ConfigFiles
-# paths have to sit under the real labs directory for the orphan check — which
-# is a check about WHERE a project's compose file lives — to mean anything.
-[ "$1" = compose ] || exit 1
-case "$2" in
-	version) exit ${FAKE_DOCKER_BROKEN:-0} ;;
-	ls) sed "s|@LABS@|$WORK/.config/secure-agent-lab/labs|g" "$FAKE_DOCKER_LS" ;;
-	*) exit 1 ;;
-esac
 -- nothing.json --
 []
 -- running.json --
