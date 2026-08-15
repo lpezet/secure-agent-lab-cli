@@ -1,0 +1,181 @@
+# `sal features` — the uniform lifecycle verbs, in one place.
+#
+# A feature is a compose PROFILE, and the service it turns on has the same
+# name. Nothing in sal knows what the observer is: the compose file declares a
+# profile, `docker compose config --profiles` reports it, and .env's
+# COMPOSE_PROFILES says which are on. That is what lets the template stay a
+# file that could move to the stack repo as a copy — it gained one static key,
+# not a conditional.
+
+[windows] skip 'the fake docker is a /bin/sh script'
+
+env PATH=$FIXTURES/fake-docker:$PATH
+env FAKE_DOCKER_LOG=$WORK/calls.log
+
+cd project
+exec sal init --stack-dir $FIXTURES/local-stack
+
+# A new lab writes the variable out rather than relying on a default, so a
+# `docker compose up` run by hand starts the same services `sal up` does.
+#
+# Read through a shell because the deployment's directory is named for a hash
+# of this project's path, which a script cannot spell.
+exec sh -c 'cat $HOME/.config/secure-agent-lab/labs/*/.env'
+stdout '^COMPOSE_PROFILES=observer$'
+
+# --------------------------------------------------------------------- list
+exec sal features list
+stdout '^observer\s+on\s+lab is not running$'
+
+# "not running" is said of a feature only when the lab itself is up. Otherwise
+# it is true of every service and reads as a finding about this one.
+! stderr 'warning'
+
+# ------------------------------------------------------------------- enable
+#
+# Already-on is not an error. A command that fails when the state is already
+# what you asked for cannot be put in a script.
+exec sal features enable observer
+stderr 'already on'
+! grep '^up ' $WORK/calls.log
+
+# A name the compose file does not declare is refused, with what it does have.
+! exec sal features enable nosuchthing
+stderr 'no feature "nosuchthing"'
+stderr 'observer'
+
+# ------------------------------------------------------------------ disable
+exec sal features disable observer
+stderr 'disabled'
+
+# Disabling the observer must not delete the trail it was serving, and says so
+# — the reassurance is the point, since "disable" reads like "remove".
+stderr 'volumes are untouched'
+! grep 'volumes' $WORK/calls.log
+
+# Nothing to stop while the lab is down, and the record still moves.
+exec sh -c 'cat $HOME/.config/secure-agent-lab/labs/*/.env'
+stdout '^COMPOSE_PROFILES=$'
+
+exec sal features list
+stdout '^observer\s+off'
+
+# And the observer's own commands say the feature is off, rather than sending
+# someone to `sal up`, which would do nothing and look like sal is broken.
+! exec sal observer open
+stderr 'observer is disabled'
+stderr 'sal features enable observer'
+! stderr 'Start it with `sal up`'
+
+# ------------------------------------------------------- with the lab running
+env FAKE_DOCKER_RUNNING=lab
+
+# Enabled while the lab is up, the service is started rather than left for the
+# next `sal up`.
+rm $WORK/calls.log
+exec sal features enable observer
+stdout 'up -d observer'
+stderr 'enabled and started'
+
+# The profile is passed explicitly on the way, rather than left to compose
+# reading .env — sal's own behaviour must not depend on that.
+grep '^up profiles: observer$' $WORK/calls.log
+
+# Enabled but not running, in a lab that is up, is the finding worth
+# interrupting for: it is how someone comes to trust an audit trail that
+# nothing is writing.
+exec sal features list
+stdout '^observer\s+on\s+not running$'
+stderr 'enabled but not running'
+stderr 'not being done'
+
+# With the service actually up, no warning and no note.
+env FAKE_DOCKER_RUNNING='lab observer'
+exec sal features list
+stdout '^observer\s+on\s+running$'
+! stderr 'warning'
+! stderr 'note'
+
+# THE ordering rule. A feature that could not be stopped must not be recorded
+# as off: a record saying a feature is off while it runs is untidy, and the
+# reverse — believing one is ON when nothing is running it — is how someone
+# comes to trust an audit trail that does not exist.
+env FAKE_DOCKER_FAIL_VERB=rm
+! exec sal features disable observer
+stderr 'rm'
+exec sh -c 'cat $HOME/.config/secure-agent-lab/labs/*/.env'
+stdout '^COMPOSE_PROFILES=observer$'
+env FAKE_DOCKER_FAIL_VERB=
+
+# Disabling a running feature stops and removes its container, and only then
+# records it off.
+rm $WORK/calls.log
+exec sal features disable observer
+stdout 'rm --stop --force observer'
+! stdout 'volumes'
+
+# With its profile named explicitly, because .env is about to stop enabling it
+# and compose would then not consider the service to exist.
+grep '^rm profiles: observer$' $WORK/calls.log
+
+exec sh -c 'cat $HOME/.config/secure-agent-lab/labs/*/.env'
+stdout '^COMPOSE_PROFILES=$'
+
+# ------------------------------------------------------------------ `sal up`
+#
+# Which features came up is printed every time, not only when one is off. A
+# feature that is off is not an error — but an audit trail nobody is serving is
+# not a thing to find out by noticing an absence.
+exec sal up
+stdout 'feature\s+observer\s+off'
+
+exec sal features enable observer
+exec sal up
+stdout 'feature\s+observer\s+on'
+
+# ------------------------------------ a lab whose .env never learned about it
+#
+# An absent COMPOSE_PROFILES means every feature ON, not none. A lab created
+# before features existed — or one whose .env lost a line — must not come up
+# quietly serving no audit trail. A feature that fails on is visible; a feature
+# that fails off is not.
+cd $WORK/unversioned
+exec sal features list
+stdout '^observer\s+on'
+
+rm $WORK/calls.log
+exec sal up
+grep '^up profiles: observer$' $WORK/calls.log
+
+# --------------------------------------------------- a lab with no features
+#
+# One created before sal had any keeps its compose file until an upgrade
+# re-renders it, and says so rather than printing nothing.
+cd $WORK/old
+exec sal features list
+! stdout .
+stderr 'declares no features'
+stderr 'sal upgrade'
+
+-- project/.keep --
+-- unversioned/.sal/lab.json --
+{"schema_version": 1, "name": "unversioned-lab", "stack_tag": "v1.9.0"}
+-- .config/secure-agent-lab/labs/unversioned-lab/compose.yaml --
+name: unversioned-lab
+services:
+  observer:
+    profiles: ["observer"]
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.9.0:stack/observer
+-- .config/secure-agent-lab/labs/unversioned-lab/.sal/installed.json --
+{"schema_version": 1, "stack_tag": "v1.9.0", "installed": []}
+-- .config/secure-agent-lab/labs/unversioned-lab/.env --
+# No COMPOSE_PROFILES here, which is what a lab from before features looks like.
+-- old/.sal/lab.json --
+{"schema_version": 1, "name": "old-lab", "stack_tag": "v1.9.0"}
+-- .config/secure-agent-lab/labs/old-lab/compose.yaml --
+name: old-lab
+services:
+  observer:
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.9.0:stack/observer
+-- .config/secure-agent-lab/labs/old-lab/.sal/installed.json --
+{"schema_version": 1, "stack_tag": "v1.9.0", "installed": []}

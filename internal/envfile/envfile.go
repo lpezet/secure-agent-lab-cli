@@ -1,4 +1,9 @@
-package installer
+// Package envfile reads and writes the KEY=VALUE files a deployment keeps.
+//
+// Two of them, and keeping them apart is a boundary property rather than
+// tidiness: .env is the broker's and proxy's environment, lab.env is the lab
+// container's, and the lab must never receive the broker's.
+package envfile
 
 import (
 	"bufio"
@@ -11,13 +16,13 @@ import (
 	"strings"
 )
 
-// upsertEnvFile sets keys in a KEY=VALUE file, leaving everything else alone.
+// Upsert sets keys in a KEY=VALUE file, leaving everything else alone.
 //
 // Rewriting the file wholesale would be simpler and wrong: the file is shared
 // by every provider installed into the deployment, and an operator may have
 // edited a value by hand. Existing keys are updated in place so ordering and
 // comments survive, and new ones are appended.
-func upsertEnvFile(path string, updates map[string]string) error {
+func Upsert(path string, updates map[string]string) error {
 	for k, v := range updates {
 		if strings.ContainsAny(v, "\n\r") {
 			// A newline would silently truncate the value and turn the rest
@@ -40,10 +45,10 @@ func upsertEnvFile(path string, updates map[string]string) error {
 	scan := bufio.NewScanner(bytes.NewReader(existing))
 	for scan.Scan() {
 		line := scan.Text()
-		if key, ok := envKey(line); ok {
-			if val, found := remaining[key]; found {
-				fmt.Fprintf(&out, "%s=%s\n", key, val)
-				delete(remaining, key)
+		if k, ok := key(line); ok {
+			if val, found := remaining[k]; found {
+				fmt.Fprintf(&out, "%s=%s\n", k, val)
+				delete(remaining, k)
 				continue
 			}
 		}
@@ -70,27 +75,27 @@ func upsertEnvFile(path string, updates map[string]string) error {
 	return os.WriteFile(path, out.Bytes(), 0o600)
 }
 
-// envKey returns the key of an assignment line, if it is one. Comments and
+// key returns the key of an assignment line, if it is one. Comments and
 // blank lines are not.
-func envKey(line string) (string, bool) {
+func key(line string) (string, bool) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 		return "", false
 	}
-	key, _, found := strings.Cut(trimmed, "=")
+	k, _, found := strings.Cut(trimmed, "=")
 	if !found {
 		return "", false
 	}
-	key = strings.TrimSpace(key)
-	if key == "" {
+	k = strings.TrimSpace(k)
+	if k == "" {
 		return "", false
 	}
-	return key, true
+	return k, true
 }
 
-// readEnvFile returns the assignments in a KEY=VALUE file. A missing file is
+// Read returns the assignments in a KEY=VALUE file. A missing file is
 // an empty set rather than an error: a virgin deployment has nothing in it.
-func readEnvFile(path string) (map[string]string, error) {
+func Read(path string) (map[string]string, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return map[string]string{}, nil
@@ -103,12 +108,12 @@ func readEnvFile(path string) (map[string]string, error) {
 	scan := bufio.NewScanner(bytes.NewReader(b))
 	for scan.Scan() {
 		line := scan.Text()
-		key, ok := envKey(line)
+		k, ok := key(line)
 		if !ok {
 			continue
 		}
 		_, value, _ := strings.Cut(strings.TrimSpace(line), "=")
-		values[key] = value
+		values[k] = value
 	}
 	return values, scan.Err()
 }

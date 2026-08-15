@@ -161,6 +161,15 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 		"Broker and proxy configuration. Written by `sal providers add` from each\nprovider's manifest; a virgin lab needs nothing here."); err != nil {
 		return err
 	}
+	// Written out rather than left to a default, so a `docker compose up` run
+	// by hand starts the same services `sal up` does. sal treats an absent
+	// value as every feature on, which is the safe direction for a lab that
+	// predates features — but compose treats it as none of them, and a lab
+	// serving no audit trail because nobody wrote a line down is not a
+	// difference worth leaving on the table.
+	if err := writeProfiles(filepath.Join(labDir, ".env"), compose.DefaultProfiles); err != nil {
+		return err
+	}
 	if err := writeEnvFile(filepath.Join(labDir, "lab.env"),
 		"Environment for the lab container only, from each provider's lab_env.\nSeparate from .env so the lab never receives the broker's environment."); err != nil {
 		return err
@@ -315,6 +324,7 @@ func runUp(cmd *cobra.Command, build bool) error {
 	if url, err := r.ObserverURL(cmd.Context()); err == nil && url != "" {
 		fmt.Fprintf(out, "observer %s\n", url)
 	}
+	reportFeatures(cmd, l, r)
 	return nil
 }
 
@@ -373,20 +383,16 @@ func runnerFor(cmd *cobra.Command) (*lab.Lab, *compose.Runner, error) {
 	if err := compose.Available(cmd.Context()); err != nil {
 		return nil, nil, err
 	}
-	return l, &compose.Runner{
-		File:   l.ComposeFile(),
-		Stdout: cmd.OutOrStdout(),
-		Stderr: cmd.ErrOrStderr(),
-	}, nil
-}
-
-func newOpenCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "open",
-		Short: "Open a shell in this project's lab",
-		Args:  cobra.ArbitraryArgs,
-		RunE:  notImplemented,
+	profiles, err := configuredProfiles(l.Dir)
+	if err != nil {
+		return nil, nil, err
 	}
+	return l, &compose.Runner{
+		File:     l.ComposeFile(),
+		Stdout:   cmd.OutOrStdout(),
+		Stderr:   cmd.ErrOrStderr(),
+		Profiles: profiles,
+	}, nil
 }
 
 func newUpgradeCmd() *cobra.Command {
@@ -517,6 +523,15 @@ func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
 	// means a lab from before the field existed gains one here, which is what
 	// the "unrecorded" line in `sal labs list` tells the operator to do.
 	newRec.ProjectDir = l.ProjectDir
+
+	// A lab created before features existed has no COMPOSE_PROFILES, and the
+	// re-render below gives its compose file profiles for the first time. sal
+	// would read the absent value as everything on; compose, run by hand,
+	// would read it as nothing on. Writing it settles the disagreement in the
+	// direction that keeps the audit trail served.
+	if err := backfillProfiles(l.Dir); err != nil {
+		return err
+	}
 
 	// Re-render last: if anything above failed, the compose file still
 	// describes the release the files on disk came from.

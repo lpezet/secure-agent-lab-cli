@@ -9,22 +9,10 @@
 # implemented. That is the intended alarm — delete the line and write a real
 # script for it.
 
-! exec sal open
-stderr 'not implemented yet'
-
 ! exec sal providers create acme
 stderr 'not implemented yet'
 
 ! exec sal providers remove acme
-stderr 'not implemented yet'
-
-! exec sal features list
-stderr 'not implemented yet'
-
-! exec sal features enable observer
-stderr 'not implemented yet'
-
-! exec sal features disable observer
 stderr 'not implemented yet'
 
 # The error names the full command path, so a failure in a script says which
