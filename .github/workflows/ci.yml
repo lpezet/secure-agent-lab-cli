@@ -26,6 +26,11 @@ jobs:
       # nothing else breaks at the moment it is violated.
       - run: go test ./...
 
+      # The install script's refusals: a tampered archive, a release with no
+      # checksums, a signature that does not verify. curl and cosign are fakes
+      # on PATH, so this needs no network and no release to exist.
+      - run: make test-install
+
       - name: gofmt
         run: |
           unformatted=$(gofmt -l .)

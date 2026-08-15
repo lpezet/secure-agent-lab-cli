@@ -789,6 +789,37 @@ will say so. Cheap mitigations, all worth doing: publish a checksum, keep the
 script short enough to actually read, and document clone-and-inspect as a
 first-class alternative rather than a footnote.
 
+**The mitigations are only worth something if they REFUSE**, so `tests/install/`
+produces each refusal rather than assuming it: a tampered archive, a release
+with no `checksums.txt`, a signature that does not verify, an architecture
+there is no build for. `curl` and `cosign` are fakes first on `PATH` — the same
+technique the txtar scripts use for `docker` — so it needs no network and no
+published release.
+
+That harness pins `PATH` to its own fakes plus `/usr/bin:/bin`, and that is a
+correctness property rather than hygiene: whether `install.sh` takes the cosign
+branch is decided by whether cosign is ON `PATH`, so inheriting the developer's
+would decide which half of the script is under test. On a machine with cosign
+installed, the "signature NOT checked" path would never run at all. Not
+hypothetical — it is how this harness's first run passed a test it was not
+running.
+
+**Signing produces a Sigstore BUNDLE, and verifying needs cosign v3.** Not a
+preference: cosign v3 removed `--output-signature` and `--output-certificate`
+from `sign-blob`, and removed `--signature` and `--certificate` from
+`verify-blob`, so the previous detached `.sig` + `.pem` pair could no longer be
+produced *or* checked. The release workflow pins the cosign version for the
+same reason — the signing flags in `.goreleaser.yaml` and the verify flags in
+`install.sh` are v3's, and a silent jump across that line breaks releases at
+the one moment nobody is watching. `make snapshot` skips signing, because
+keyless signing needs an OIDC token only CI has.
+
+**Every 0.x release is marked a pre-release**, rather than left to GoReleaser's
+`auto` — which only looks at the tag's suffix and would publish `v0.2.0` as a
+full release. The README says the design is still settling and the two on-disk
+formats are not declared stable; the release page must not say otherwise. This
+becomes `auto` at 1.0.
+
 ## Still open
 
 - **Whether `sal` should generate a `.devcontainer` for a project, and what it

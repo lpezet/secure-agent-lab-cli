@@ -52,14 +52,22 @@ checksum:
 
 # Keyless signing over the checksum file. Verifying one signature covers every
 # artifact, since the checksums file covers them.
+#
+# A Sigstore BUNDLE rather than a detached .sig plus .pem: cosign v3 removed
+# --output-signature and --output-certificate from `sign-blob`, and removed
+# --signature and --certificate from `verify-blob` — so the old pair of files
+# could no longer be produced OR checked. The bundle carries the signature, the
+# certificate and the transparency-log entry in one file, which also means the
+# install script fetches one artifact instead of two.
+#
+# Verification therefore needs cosign v3 or newer, and that is stated wherever
+# a verify command is printed.
 signs:
   - cmd: cosign
-    certificate: "${artifact}.pem"
-    signature: "${artifact}.sig"
+    signature: "${artifact}.bundle"
     args:
       - sign-blob
-      - "--output-signature=${signature}"
-      - "--output-certificate=${certificate}"
+      - "--bundle=${signature}"
       - "${artifact}"
       - "--yes"
     artifacts: checksum
@@ -80,14 +88,21 @@ changelog:
       - "^chore:"
 
 release:
-  prerelease: auto
+  # Every 0.x release is marked a pre-release, deliberately, rather than left to
+  # `auto` — which only looks at the tag's suffix and would publish v0.2.0 as a
+  # full release. The README says the design is still settling and the two
+  # on-disk formats are not declared stable; the release page should not say
+  # something different. This becomes `auto` at 1.0.
+  prerelease: true
   footer: |
     ## Verify
 
+    Needs [cosign](https://github.com/sigstore/cosign) v3 or newer — v2 cannot
+    read this bundle format.
+
     ```
     cosign verify-blob checksums.txt \
-      --signature checksums.txt.sig \
-      --certificate checksums.txt.pem \
+      --bundle checksums.txt.bundle \
       --certificate-identity-regexp 'https://github.com/lpezet/secure-agent-lab-cli/.*' \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
     sha256sum -c checksums.txt --ignore-missing

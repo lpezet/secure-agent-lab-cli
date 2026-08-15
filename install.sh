@@ -66,16 +66,24 @@ curl -fsSL -o "${tmp}/${archive}" "${base}/${archive}" \
 curl -fsSL -o "${tmp}/checksums.txt" "${base}/checksums.txt" \
   || die "release ${VERSION} publishes no checksums.txt; refusing to install unverified"
 
+# A Sigstore bundle: one file carrying the signature, the certificate and the
+# transparency-log entry. cosign v3 removed the flags that produced and checked
+# a detached .sig plus .pem, so an older cosign cannot verify this and says so
+# rather than appearing to.
 if command -v cosign >/dev/null 2>&1; then
-  curl -fsSL -o "${tmp}/checksums.txt.sig" "${base}/checksums.txt.sig"
-  curl -fsSL -o "${tmp}/checksums.txt.pem" "${base}/checksums.txt.pem"
-  cosign verify-blob "${tmp}/checksums.txt" \
-    --signature "${tmp}/checksums.txt.sig" \
-    --certificate "${tmp}/checksums.txt.pem" \
+  curl -fsSL -o "${tmp}/checksums.txt.bundle" "${base}/checksums.txt.bundle" \
+    || die "release ${VERSION} publishes no checksums.txt.bundle; refusing to install unverified"
+  if cosign verify-blob "${tmp}/checksums.txt" \
+    --bundle "${tmp}/checksums.txt.bundle" \
     --certificate-identity-regexp "https://github.com/${REPO}/.*" \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    >/dev/null 2>&1 || die "signature over checksums.txt did not verify"
-  note "signature verified"
+    >/dev/null 2>&1; then
+    note "signature verified"
+  else
+    die "signature over checksums.txt did not verify.
+  If your cosign is older than v3 it cannot read this bundle format — upgrade it,
+  or verify by hand from https://github.com/${REPO}/releases/tag/${VERSION}"
+  fi
 else
   note "cosign not found — checksum verified, signature NOT checked."
   note "  to check it: https://github.com/${REPO}/releases/tag/${VERSION}"
