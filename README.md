@@ -5,8 +5,8 @@ Docker stack that runs autonomous agents without exposing long-lived
 credentials to the agent's process.
 
 > **Status: early, and pre-1.0 honestly.** `init`, `up`, `down`, `upgrade`,
-> `providers add|list`, `secrets set|list`, `labs list|down` and
-> `observer open|tail` work against a real stack. `open`, `drift`,
+> `drift`, `providers add|list`, `secrets set|list`, `labs list|down` and
+> `observer open|tail` work against a real stack. `open`,
 > `providers create|remove` and `features` are still stubs that exit non-zero —
 > deliberately, since a stub returning 0 would let a script believe a
 > credential was stored.
@@ -75,6 +75,14 @@ for widening its own allowlist.
 the secrets directory mounted. That is what `sal labs list` is for, and
 `sal labs down` is how you stop one whose project no longer exists — the case
 `sal down` cannot reach, because it finds a lab from a project.
+
+**`sal drift` is the check for the problem above.** It compares every file the
+deployment owns against the release it is pinned to — proxy addons, broker
+providers, gateway configs and the generated compose file — and exits non-zero
+on any difference, so it can be a CI step. Because a sal-managed deployment
+records what was installed, it also reports the two things a file-by-file diff
+cannot: a file the release ships that this lab does not have, and a file in a
+managed directory that nothing installed.
 
 **The URL comes before the browser, always.** `sal observer open` prints the
 observer's URL on stdout and only then attempts to launch something. A launch

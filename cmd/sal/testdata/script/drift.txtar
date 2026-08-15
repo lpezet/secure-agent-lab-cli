@@ -1,0 +1,160 @@
+# `sal drift` — the check for the problem this repo exists to fix.
+#
+# A deployment's images move when it repins; the files that ENFORCE the
+# boundary do not, because they are bind-mounted from directories the
+# deployment owns. So a lab can sit on a release containing a security fix and
+# keep running the vulnerable file, with nothing in `docker compose ps` to say
+# so. This is what sees that.
+#
+# Two labs, because they prove different things. The first is created the way
+# an operator creates one and must come out clean — a check that cries wolf on
+# a lab nobody has touched is a check people learn to skip. The second is
+# seeded with every finding at once, which is not a state `sal` can be asked to
+# produce.
+
+# ------------------------------------------------------------- a clean lab
+cd project
+exec sal init --stack-dir $FIXTURES/local-stack
+exec sal providers add widget --stack-dir $FIXTURES/local-stack
+
+exec sal drift --stack-dir $FIXTURES/local-stack
+stdout '^pinned\s+v1\.9\.0'
+
+# Every file it owns, from all three sources: the stack's own proxy addons, the
+# bank entry's files, and the compose file sal generated.
+stdout 'ok\s+proxy/000_policy\.py\s+matches stack/proxy/addons/'
+stdout 'ok\s+proxy/010_widget\.py\s+matches bank/widget/proxy/'
+stdout 'ok\s+broker/widget\.js\s+matches bank/widget/broker/'
+stdout 'ok\s+compose\.yaml\s+matches what sal renders'
+stdout 'summary\s+0 drift · 0 missing · 0 stale · 0 unowned'
+
+# And it says what it did NOT check, because a clean report is exactly when
+# someone is most likely to read more into it than it says.
+stderr 'known list, not a review'
+
+# ------------------------------------------------- a lab with every finding
+cd $WORK/drifted
+
+! exec sal drift --stack-dir $FIXTURES/local-stack
+
+# THE finding: a boundary file that is not the one the release it claims to be
+# at ships. This is the whole reason the command exists.
+stdout 'DRIFT\s+broker/acme\.js\s+differs from bank/acme/broker/'
+stdout 'DRIFT\s+proxy/000_policy\.py\s+differs from stack/proxy/addons/'
+
+# An addon the release ships that this deployment does not have — including one
+# its record never listed. A control that is absent is worse than one that is
+# stale, and reading only the record would miss it entirely.
+stdout 'MISSING\s+proxy/001_allowlist\.py'
+
+# A lab_setup fragment is compared like anything else an entry installs.
+stdout 'MISSING\s+lab/acme\.sh'
+
+# Recorded, still on disk, no longer shipped. A cred-gateway config in this
+# state keeps whitelisting a route its entry no longer exposes — a widened
+# boundary that nothing else reports.
+stdout 'STALE\s+cred-gateway/acme-legacy\.conf'
+
+# Nothing installed this. In a deployment sal manages that is not a custom
+# file, it is a file that arrived some other way — and the thing most likely to
+# have put an extra .conf in cred-gateway/ is the agent.
+stdout 'UNOWNED\s+cred-gateway/rogue\.conf'
+
+# The generated compose file is compared too. The loopback-only observer
+# publish and the internal lab network both live in it, so an edit there is a
+# change to the boundary no other check would see.
+stdout 'DRIFT\s+compose\.yaml'
+
+# A file in lab/ that sal did not install is NOT reported: that directory is
+# the operator's build context and its Dockerfile is theirs by design.
+! stdout 'UNOWNED\s+lab/'
+! stdout 'Dockerfile'
+
+stdout 'summary\s+3 drift · 4 missing · 1 stale · 1 unowned'
+
+# Advice for what was found, and only for that. A wall of advice about things
+# that are fine is how a report stops being read.
+stderr 'sal upgrade'
+stderr 'keeps whitelisting a route'
+stderr 'no upstream fix reaches them'
+! stderr 'known list, not a review'
+
+# --------------------------------------------------------------- show-diff
+#
+# "What changed?" is the next question every time.
+! exec sal drift --stack-dir $FIXTURES/local-stack --show-diff
+stdout '\+# an edit nobody recorded'
+
+# Including for the compose file, whose reference was rendered rather than
+# fetched — so there is no file on disk to point at.
+stdout '\+# hand-edited'
+
+# ------------------------------------- a record naming an entry that is gone
+#
+# Said once, about the record, rather than four times about its files: an
+# entry sal cannot resolve has files it cannot judge, and reporting each of
+# them as unowned would accuse the operator of smuggling in what sal itself
+# installed.
+cd $WORK/vanished
+! exec sal drift --stack-dir $FIXTURES/local-stack
+stdout 'DRIFT\s+\.sal[/\\]installed\.json\s+records "vanished"'
+! stdout 'UNOWNED\s+proxy/010_vanished\.py'
+
+# ------------------------------------------------------------- with no lab
+cd $WORK
+! exec sal drift --stack-dir $FIXTURES/local-stack
+stderr 'no lab for this directory'
+
+-- project/.keep --
+-- drifted/.sal/lab.json --
+{"schema_version": 1, "name": "drifted-lab", "stack_tag": "v1.9.0"}
+-- vanished/.sal/lab.json --
+{"schema_version": 1, "name": "vanished-lab", "stack_tag": "v1.9.0"}
+-- .config/secure-agent-lab/labs/drifted-lab/compose.yaml --
+name: drifted-lab
+# hand-edited
+-- .config/secure-agent-lab/labs/drifted-lab/.sal/installed.json --
+{
+  "schema_version": 1,
+  "stack_tag": "v1.9.0",
+  "base_addons": ["000_policy.py"],
+  "installed": [
+    {
+      "name": "acme",
+      "slot": 10,
+      "schema_version": 1,
+      "stack_tag": "v1.9.0",
+      "files": [
+        "broker/acme.js",
+        "proxy/010_acme.py",
+        "cred-gateway/acme.conf",
+        "cred-gateway/acme-legacy.conf",
+        "lab/acme.sh"
+      ]
+    }
+  ]
+}
+-- .config/secure-agent-lab/labs/drifted-lab/broker/acme.js --
+// not what the release ships
+-- .config/secure-agent-lab/labs/drifted-lab/proxy/000_policy.py --
+_INTERNAL_HOSTS = {"broker"}
+# an edit nobody recorded
+-- .config/secure-agent-lab/labs/drifted-lab/cred-gateway/acme-legacy.conf --
+location = /acme/legacy { proxy_pass http://broker:8080; }
+-- .config/secure-agent-lab/labs/drifted-lab/cred-gateway/rogue.conf --
+location = /acme/token { proxy_pass http://broker:8080; }
+-- .config/secure-agent-lab/labs/drifted-lab/lab/Dockerfile --
+FROM debian:stable-slim
+-- .config/secure-agent-lab/labs/vanished-lab/compose.yaml --
+name: vanished-lab
+-- .config/secure-agent-lab/labs/vanished-lab/.sal/installed.json --
+{
+  "schema_version": 1,
+  "stack_tag": "v1.9.0",
+  "base_addons": [],
+  "installed": [
+    {"name": "vanished", "slot": 10, "schema_version": 1, "files": ["proxy/010_vanished.py"]}
+  ]
+}
+-- .config/secure-agent-lab/labs/vanished-lab/proxy/010_vanished.py --
+# installed from a bank entry that no longer exists

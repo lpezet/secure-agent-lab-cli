@@ -539,9 +539,21 @@ func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
 
 // renderCompose rewrites compose.yaml for a release.
 func renderCompose(l *lab.Lab, stackTag string) error {
-	secretsDir, err := config.SecretsDir()
+	rendered, err := renderComposeBytes(l, stackTag)
 	if err != nil {
 		return err
+	}
+	return os.WriteFile(l.ComposeFile(), rendered, 0o600)
+}
+
+// renderComposeBytes renders without writing, which is what lets `sal drift`
+// compare a deployment's compose file against the one sal would produce for it
+// — using the same renderer, so the two cannot drift apart on what a
+// deployment's compose file should look like.
+func renderComposeBytes(l *lab.Lab, stackTag string) ([]byte, error) {
+	secretsDir, err := config.SecretsDir()
+	if err != nil {
+		return nil, err
 	}
 	_, labDockerfile := os.Stat(filepath.Join(l.Dir, "lab", "Dockerfile"))
 
@@ -553,9 +565,9 @@ func renderCompose(l *lab.Lab, stackTag string) error {
 		StackTag:      stackTag,
 		LabDockerfile: labDockerfile == nil,
 	}); err != nil {
-		return err
+		return nil, err
 	}
-	return os.WriteFile(l.ComposeFile(), rendered.Bytes(), 0o600)
+	return rendered.Bytes(), nil
 }
 
 // collectUpgradeValues prompts only for config a new release added.
@@ -628,16 +640,4 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
-}
-
-func newDriftCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "drift",
-		Short: "Report files in this lab that differ from its pinned stack release",
-		Long: "Note that scripts/check-drift.sh stays in the stack repo even though this\n" +
-			"exists. It is dependency-free bash that works for someone who never installs\n" +
-			"sal, and that is worth a little duplication.",
-		Args: cobra.NoArgs,
-		RunE: notImplemented,
-	}
 }
