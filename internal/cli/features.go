@@ -179,9 +179,15 @@ func runFeatureSet(cmd *cobra.Command, name string, enable bool) error {
 		return nil
 	}
 
-	// Stopped BEFORE the record changes, and with the profile named
-	// explicitly: once .env no longer enables it, compose does not consider
-	// the service to exist and cannot be asked to remove it.
+	// Stopped BEFORE the record changes. The reverse order can leave the
+	// record saying a feature is on while nothing is running it, which is how
+	// someone comes to trust an audit trail that does not exist.
+	//
+	// The profile is named explicitly as well. Not because it is required —
+	// tests/compose checks that naming the service is enough on current
+	// compose, which is the opposite of what this comment used to claim — but
+	// because that behaviour is compose's to change and this does not depend
+	// on it.
 	if current.Running {
 		down := *r
 		down.Profiles = withProfile(r.Profiles, name)

@@ -7,7 +7,7 @@ COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null)
 LDFLAGS := -X $(PKG)/internal/version.version=$(VERSION) \
            -X $(PKG)/internal/version.commit=$(COMMIT)
 
-.PHONY: all build test test-install test-install-containers vet fmt fmt-check check clean snapshot
+.PHONY: all build test test-install test-install-containers test-compose vet fmt fmt-check check clean snapshot
 
 all: check build
 
@@ -45,6 +45,13 @@ test-install:
 # busybox has no long options, and GNU sha256sum has no -s.
 test-install-containers:
 	bash tests/install/containers.sh
+
+# The `docker compose` behaviours sal depends on, checked against the real
+# binary rather than against documentation. Separate from `check` for the same
+# reason as the container tier: it needs Docker and exits 2 without it. It does
+# NOT build the lab's images — this is about compose's semantics, not the stack.
+test-compose:
+	bash tests/compose/run.sh
 
 # What CI runs, and it must stay that. Three parts of it are not optional
 # extras: internal/invariants is the guard on this repo having no per-provider

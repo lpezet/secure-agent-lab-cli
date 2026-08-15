@@ -712,7 +712,15 @@ Consequences worth stating, since each had a plausible alternative:
 - **Shell out to `docker compose`. Do not link `compose-go` or the Docker SDK.**
   The compose file in the stack repo is the source of truth and its semantics
   are enormous; the `docker` CLI is the stable contract. It also means `sal`
-  never needs the Docker socket itself.
+  never needs the Docker socket itself. `tests/compose/run.sh` is what
+  makes "the CLI is the stable contract" a checked claim: it pins the
+  behaviours sal's code assumes — profile selection from `.env` and from
+  `--profile`, `config --profiles`, the `port` read-back and its failure shape,
+  what `ps --quiet` answers for a service with no container — against the real
+  binary. Every one of them was written from documentation first, and one was
+  wrong: `docker compose rm` CAN remove a service whose profile is not enabled,
+  as long as the service is named. sal passes `--profile` anyway, because that
+  behaviour is compose's to change and nothing here should depend on it.
 - **Fetch the bank over HTTPS, not git.** `net/http` + `archive/tar` +
   `compress/gzip` against `codeload.github.com/.../tar/refs/tags/<tag>` — no git
   dependency on the user's machine, which is what contract item 2 asks for.
