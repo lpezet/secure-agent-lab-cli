@@ -280,49 +280,6 @@ func TestApplyTightensAnExistingSecret(t *testing.T) {
 	}
 }
 
-func TestEnvFileUpsertPreservesTheRest(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".env")
-	original := "# a comment worth keeping\nEXISTING=untouched\nTARGET=old\n\n# trailing note\n"
-	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := upsertEnvFile(path, map[string]string{"TARGET": "new", "ADDED": "value"}); err != nil {
-		t.Fatal(err)
-	}
-
-	got := readFile(t, path)
-	for _, want := range []string{
-		"# a comment worth keeping",
-		"EXISTING=untouched",
-		"TARGET=new",
-		"# trailing note",
-		"ADDED=value",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("missing %q in:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "TARGET=old") {
-		t.Error("the old value survived alongside the new one")
-	}
-	// Updated in place rather than appended, so an operator's ordering holds.
-	if strings.Index(got, "TARGET=new") > strings.Index(got, "# trailing note") {
-		t.Error("TARGET moved to the end instead of being updated where it was")
-	}
-}
-
-func TestEnvFileRefusesNewlines(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".env")
-	err := upsertEnvFile(path, map[string]string{"K": "one\ntwo"})
-	if err == nil {
-		t.Fatal("want an error: a newline turns the rest of the value into another assignment")
-	}
-	if _, statErr := os.Stat(path); statErr == nil {
-		t.Error("the file was written despite the refusal")
-	}
-}
-
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)

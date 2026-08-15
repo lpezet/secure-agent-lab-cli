@@ -161,6 +161,18 @@ func observerURL(cmd *cobra.Command) (string, error) {
 }
 
 func notRunning(l *lab.Lab) error {
+	// Two different situations wear the same symptom — no published port — and
+	// they need different sentences. "Not running" sends someone to `sal up`,
+	// which for a lab whose observer is switched off does nothing at all and
+	// looks like sal is broken.
+	if featureDisabled(l.Dir, observerFeature) {
+		return fmt.Errorf("the observer is disabled in lab %q, so there is no audit trail being served.\n"+
+			"Turn it back on with `sal features enable %s`", l.Name, observerFeature)
+	}
 	return fmt.Errorf("lab %q has no observer port published, which means it is not running.\n"+
 		"Start it with `sal up`, or `sal labs list` to see what is running on this machine", l.Name)
 }
+
+// observerFeature is the feature — a compose profile, and the service of the
+// same name — that this group's commands read from.
+const observerFeature = "observer"

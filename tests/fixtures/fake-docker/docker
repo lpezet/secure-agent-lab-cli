@@ -4,20 +4,21 @@
 #
 #   env PATH=$FIXTURES/fake-docker:$PATH
 #
-# Why this exists rather than real containers: the two findings `sal labs list`
-# is FOR — a lab that is running, and a compose project running out of the labs
-# directory with no deployment behind it — cannot be produced by starting real
-# containers in a test, and the second is not a state anything should be able
-# to create on purpose. This makes both deterministic while still exercising
-# sal's real exec path and its real JSON decode, rather than a seam cut into
-# the production code for tests.
+# Why this exists rather than real containers: the findings these commands are
+# FOR — a lab that is running, a compose project running out of the labs
+# directory with no deployment behind it, a feature that is enabled and not
+# running — cannot be produced by starting real containers in a test, and some
+# are not states anything should be able to create on purpose. This makes them
+# deterministic while still exercising sal's real exec path, its real JSON
+# decode and its real argument construction, rather than a seam cut into the
+# production code for tests.
 #
-# It covers exactly the three invocations sal makes:
+# It covers exactly the invocations sal makes:
 #
-#   docker compose version                    availability check
-#   docker compose ls --all --format json     state of every project
-#   docker compose -f FILE VERB...            one deployment
-#   docker ps --filter label=...              containers sal did not start
+#   docker compose version                     availability check
+#   docker compose ls --all --format json      state of every project
+#   docker compose [--profile P]... -f FILE VERB...
+#   docker ps --filter label=...               containers sal did not start
 #
 # Controlled by environment:
 #
@@ -27,37 +28,51 @@
 #                        file section cannot hold $WORK and the paths have to
 #                        be real for the under-the-labs-directory check to mean
 #                        anything
-#   FAKE_DOCKER_LOG      appended with "VERB FILE" for every -f invocation, so
-#                        a script can assert which labs were acted on
+#   FAKE_DOCKER_LOG      appended with "VERB FILE" for every -f invocation, and
+#                        with "VERB profiles: ..." when any were passed, so a
+#                        script can assert which labs were acted on and with
+#                        which profiles — per verb, since several calls make up
+#                        one command
 #   FAKE_DOCKER_FAIL     compose files containing this substring exit 1, for
 #                        testing that one failure does not abandon the rest
-#   FAKE_DOCKER_PORT     what `compose -f FILE port observer 9000` answers.
-#                        Unset means the service has no container, which is how
-#                        a lab that is not running looks
-#   FAKE_DOCKER_LAB      what `compose -f FILE ps --quiet lab` answers. Unset
-#                        means the lab service is not up
+#   FAKE_DOCKER_FAIL_VERB
+#                        this verb exits 1, for the half-done states
+#   FAKE_DOCKER_PORT     what `port observer 9000` answers. Unset means the
+#                        service has no container, which is how a lab that is
+#                        not running looks
+#   FAKE_DOCKER_RUNNING  space-separated services that `ps --quiet SERVICE`
+#                        reports a container for
 #   FAKE_DOCKER_PS       what `docker ps` answers for a label query
 #   FAKE_DOCKER_PS_OURS  what it answers when the query is narrowed to the
 #                        lab's own compose project
+#
+# `config --profiles` is NOT an env knob: it reads the compose file it was
+# given, so a script that rendered a real one gets the real answer and a
+# hand-seeded stub with no profiles correctly reports a lab with no features.
 
 # `docker ps` — not a compose call. sal uses it to find a container that is NOT
 # part of the deployment: a dev container VS Code started for this project.
-# FAKE_DOCKER_PS holds what it answers; a query narrowed to the lab's own
-# compose project answers FAKE_DOCKER_PS_OURS instead, which is how a script
-# says "that container belongs to something else".
 if [ "$1" = ps ]; then
 	case "$*" in
-	*com.docker.compose.project*) printf '%s' "${FAKE_DOCKER_PS_OURS:+$FAKE_DOCKER_PS_OURS
-}" ;;
-	*) printf '%s' "${FAKE_DOCKER_PS:+$FAKE_DOCKER_PS
-}" ;;
+	*com.docker.compose.project*) [ -n "$FAKE_DOCKER_PS_OURS" ] && echo "$FAKE_DOCKER_PS_OURS" ;;
+	*) [ -n "$FAKE_DOCKER_PS" ] && echo "$FAKE_DOCKER_PS" ;;
 	esac
 	exit 0
 fi
 
 [ "$1" = compose ] || exit 1
+shift
 
-case "$2" in
+# Profiles are global flags, so they arrive before -f. Recorded rather than
+# skipped over: that sal passes them explicitly instead of trusting compose to
+# read .env is a decision worth being able to assert.
+profiles=""
+while [ "$1" = "--profile" ]; do
+	profiles="$profiles $2"
+	shift 2
+done
+
+case "$1" in
 version)
 	exit "${FAKE_DOCKER_BROKEN:-0}"
 	;;
@@ -65,29 +80,57 @@ ls)
 	sed "s|@LABS@|$WORK/.config/secure-agent-lab/labs|g" "$FAKE_DOCKER_LS"
 	;;
 -f)
-	file=$3
-	verb=$4
-	[ -n "$FAKE_DOCKER_LOG" ] && echo "$verb $file" >>"$FAKE_DOCKER_LOG"
+	file=$2
+	verb=$3
+	shift 2
+
+	if [ -n "$FAKE_DOCKER_LOG" ]; then
+		echo "$verb $file" >>"$FAKE_DOCKER_LOG"
+		# On its own line, but naming the verb: several calls make up one
+		# command, and "some call passed --profile observer" is not the same
+		# claim as "the `up` did".
+		[ -n "$profiles" ] && echo "$verb profiles:$profiles" >>"$FAKE_DOCKER_LOG"
+	fi
+
 	if [ -n "$FAKE_DOCKER_FAIL" ] && [ "${file#*"$FAKE_DOCKER_FAIL"}" != "$file" ]; then
 		echo "fake docker: refusing $file" >&2
 		exit 1
 	fi
-	# `port` answers with a published address and nothing else, because sal
-	# reads its stdout. An unset FAKE_DOCKER_PORT is the shape docker has for a
-	# service with no container: empty output, exit 0.
-	if [ "$verb" = port ]; then
+	# One verb refusing, where FAKE_DOCKER_FAIL refuses a whole deployment. It
+	# is how a script reaches the half-done states: a feature that could not be
+	# stopped, whose record must therefore not say it was.
+	if [ -n "$FAKE_DOCKER_FAIL_VERB" ] && [ "$verb" = "$FAKE_DOCKER_FAIL_VERB" ]; then
+		echo "fake docker: refusing $verb" >&2
+		exit 1
+	fi
+
+	# Each of these answers on stdout and nothing else, because sal reads it.
+	case "$verb" in
+	port)
 		[ -n "$FAKE_DOCKER_PORT" ] && echo "$FAKE_DOCKER_PORT"
 		exit 0
-	fi
-	# `ps --quiet <service>` is how sal asks whether a service has a container.
-	# Empty output is the shape docker has for one that does not.
-	if [ "$verb" = ps ]; then
-		[ -n "$FAKE_DOCKER_LAB" ] && echo "$FAKE_DOCKER_LAB"
+		;;
+	ps)
+		# `ps --quiet SERVICE`: an id when that service has a container,
+		# nothing when it does not.
+		service=$3
+		for up in $FAKE_DOCKER_RUNNING; do
+			[ "$up" = "$service" ] && { echo "container-$service"; exit 0; }
+		done
 		exit 0
-	fi
-	# The whole invocation, not just the verb: `sal open` decides which command
-	# to run inside the lab, and that decision is only observable here.
-	echo "fake docker: $*"
+		;;
+	config)
+		case "$*" in
+		*--profiles*) sed -n 's/^ *profiles: \["\([a-z0-9-]*\)"\].*/\1/p' "$file" ;;
+		esac
+		exit 0
+		;;
+	esac
+
+	# The whole invocation, not just the verb: which command `sal open` runs
+	# inside the lab, and which service `sal features` acts on, are only
+	# observable here.
+	echo "fake docker: compose $*"
 	;;
 *)
 	exit 1

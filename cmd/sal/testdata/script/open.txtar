@@ -28,7 +28,7 @@ stderr 'sal up'
 ! grep '^exec ' $WORK/calls.log
 
 # ------------------------------------------------------------------ running
-env FAKE_DOCKER_LAB=abc123
+env FAKE_DOCKER_RUNNING=lab
 
 exec sal open
 grep '^exec ' $WORK/calls.log

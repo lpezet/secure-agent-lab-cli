@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"sort"
 	"strings"
 )
 
@@ -24,6 +25,19 @@ type Runner struct {
 
 	Stdout, Stderr io.Writer
 	Stdin          io.Reader
+
+	// Profiles are the compose profiles to enable, passed explicitly on every
+	// invocation rather than left to COMPOSE_PROFILES in the deployment's
+	// .env.
+	//
+	// Compose reads that variable itself, and the file carries it so a
+	// hand-run `docker compose up` behaves the same way sal does. But a
+	// feature being ON is what keeps the audit trail served, and "sal's
+	// behaviour depends on compose reading a file the way I believe it does"
+	// is not a good thing to be wrong about. Passing them makes sal's own path
+	// independent of that belief; the file makes everyone else's path agree
+	// with it.
+	Profiles []string
 }
 
 // ErrNoDocker means the docker CLI or its compose plugin is missing.
@@ -43,7 +57,12 @@ func Available(ctx context.Context) error {
 }
 
 func (r *Runner) args(rest ...string) []string {
-	return append([]string{"compose", "-f", r.File}, rest...)
+	args := []string{"compose"}
+	for _, p := range r.Profiles {
+		args = append(args, "--profile", p)
+	}
+	args = append(args, "-f", r.File)
+	return append(args, rest...)
 }
 
 // Run streams a compose command's output to the caller's writers.
@@ -126,6 +145,38 @@ func List(ctx context.Context) ([]Project, error) {
 		return nil, fmt.Errorf("docker compose ls returned output this sal cannot read: %w", err)
 	}
 	return projects, nil
+}
+
+// DefaultProfiles are the profiles a new deployment starts with enabled.
+//
+// This RESTATES what the template declares, and the two must move together: a
+// profile added there and not here ships disabled, which for anything shaped
+// like the observer means a lab quietly serving no audit trail. Same shape as
+// the load-band ranges restated in internal/installer — a constant that lives
+// somewhere else and is written down here because it has to be known before
+// anything can ask Docker about it. TestEveryProfileIsAService keeps the two
+// honest.
+var DefaultProfiles = []string{"observer"}
+
+// DefinedProfiles returns every profile this deployment's compose file
+// declares, which is the list of features it has.
+//
+// Read from the file rather than from a list in sal: a feature is data, in the
+// same way a provider is. The template decides what is optional and this
+// reports it, so a profile added to the template needs no code here.
+func (r *Runner) DefinedProfiles(ctx context.Context) ([]string, error) {
+	out, err := r.Output(ctx, "config", "--profiles")
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			names = append(names, line)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 // ContainerNames asks `docker ps` which running containers match the given

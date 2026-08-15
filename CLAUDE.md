@@ -326,6 +326,34 @@ the AST invariant test reads `.go` files, so a provider name in a template would
 sail straight past it. `internal/compose`'s `TestNoProviderNamesInOutput` checks
 the rendered output for exactly that.
 
+**A feature is a compose PROFILE, and its service has the same name.** That
+equivalence is the whole implementation of `sal features`, and it is what let
+the feature question be answered without breaking the rule below: the template
+gained one static key (`profiles: ["observer"]`), not a conditional, so it
+still renders the same for every deployment and can still MOVE to the stack
+repo as a copy. Which features are on is a VALUE — `COMPOSE_PROFILES` in the
+deployment's `.env`, the variable compose reads itself, so a `docker compose
+up` run by hand starts what `sal up` starts. `compose.TestEveryProfileIsAService`
+holds the naming rule, without which a feature could list, enable and disable
+while turning nothing on or off.
+
+**An absent `COMPOSE_PROFILES` means every feature ON.** A lab created before
+features existed, or one whose `.env` lost a line, must not come up quietly
+serving no audit trail: a feature that fails on is visible, and one that fails
+off is not. `init` writes the variable anyway and `upgrade` back-fills it,
+because compose's own reading of an absent value is the opposite one — and a
+divergence between what sal starts and what a hand-run compose starts is not
+worth leaving in place.
+
+**Disabling stops the service BEFORE it records the change; enabling records
+before it starts.** Both orders point the same way: the state that must never
+be reachable is a record saying a feature is on while nothing is running it,
+because that is how someone comes to trust an audit trail that does not exist.
+The opposite disagreement is untidy and visible — `sal features list` reports
+what `.env` says and what Docker says, side by side, and warns when they differ
+in a lab that is up. `features disable` never touches a volume: the trail the
+observer was serving outlives the observer.
+
 ⚠️ **The compose template in `internal/compose/templates/` is a reference
 implementation living here temporarily.** It describes the stack's wiring, which
 is the boundary's business — so a change to the service graph currently needs a

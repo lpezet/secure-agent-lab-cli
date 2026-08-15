@@ -9,6 +9,7 @@ import (
 
 	"github.com/lpezet/secure-agent-lab-cli/internal/bank"
 	"github.com/lpezet/secure-agent-lab-cli/internal/deployment"
+	"github.com/lpezet/secure-agent-lab-cli/internal/envfile"
 )
 
 // EntryUpgrade is one installed entry, replanned against a newer release.
@@ -150,7 +151,7 @@ func listAddons(dir string) ([]string, error) {
 // Only the new ones. An upgrade re-prompting for every value an operator has
 // already set would be a good way to have them paste the wrong one.
 func (u *UpgradePlan) NewConfig(deployDir string) (map[string][]string, error) {
-	existing, err := readEnvFile(filepath.Join(deployDir, ".env"))
+	existing, err := envfile.Read(filepath.Join(deployDir, ".env"))
 	if err != nil {
 		return nil, err
 	}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lpezet/secure-agent-lab-cli/internal/deployment"
+	"github.com/lpezet/secure-agent-lab-cli/internal/envfile"
 	"github.com/lpezet/secure-agent-lab-cli/internal/secrets"
 )
 
@@ -72,7 +73,7 @@ func (p *Plan) Apply(deployDir, secretsDir, stackTag string, v Values) (*deploym
 		env[k] = v
 	}
 	if len(env) > 0 {
-		if err := upsertEnvFile(filepath.Join(deployDir, ".env"), env); err != nil {
+		if err := envfile.Upsert(filepath.Join(deployDir, ".env"), env); err != nil {
 			return nil, err
 		}
 	}
@@ -80,7 +81,7 @@ func (p *Plan) Apply(deployDir, secretsDir, stackTag string, v Values) (*deploym
 	// lab.env is separate so the lab container never receives the broker's
 	// environment — including the paths of files it must not know exist.
 	if len(p.LabEnv) > 0 {
-		if err := upsertEnvFile(filepath.Join(deployDir, "lab.env"), p.LabEnv); err != nil {
+		if err := envfile.Upsert(filepath.Join(deployDir, "lab.env"), p.LabEnv); err != nil {
 			return nil, err
 		}
 	}

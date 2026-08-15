@@ -220,3 +220,51 @@ func networksOf(out, service string) string {
 	}
 	return ""
 }
+
+// A feature is a compose profile, and `sal features enable|disable NAME` acts
+// on the SERVICE of the same name — that equivalence is the whole
+// implementation, and it lives in this template rather than in code. A profile
+// naming nothing would give a feature that lists, enables and disables while
+// turning nothing on or off.
+//
+// It also checks the other direction: every profile must be in
+// DefaultProfiles, because a profile this build does not know about ships
+// disabled on a new lab. For anything shaped like the observer that is a lab
+// quietly serving no audit trail.
+func TestEveryProfileIsAService(t *testing.T) {
+	out := render(t, sampleData())
+
+	profiles := regexp.MustCompile(`(?m)^\s+profiles: \["([a-z0-9-]+)"\]`).FindAllStringSubmatch(out, -1)
+	if len(profiles) == 0 {
+		t.Fatal("no profiles in the rendered file; sal features would have nothing to operate on")
+	}
+
+	for _, m := range profiles {
+		name := m[1]
+		if !regexp.MustCompile(`(?m)^  ` + name + `:$`).MatchString(out) {
+			t.Errorf("profile %q names no service; `sal features disable %s` would turn nothing off", name, name)
+		}
+		if !contains(DefaultProfiles, name) {
+			t.Errorf("profile %q is not in DefaultProfiles, so a new lab ships with it off", name)
+		}
+	}
+
+	for _, name := range DefaultProfiles {
+		found := false
+		for _, m := range profiles {
+			found = found || m[1] == name
+		}
+		if !found {
+			t.Errorf("DefaultProfiles names %q, which this template does not declare", name)
+		}
+	}
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, h := range haystack {
+		if h == needle {
+			return true
+		}
+	}
+	return false
+}

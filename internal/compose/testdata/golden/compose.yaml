@@ -85,6 +85,12 @@ services:
   # channel between the secure and lab sides. Do not "fix" that by giving it
   # a network.
   observer:
+    # The one optional service, and it is optional through a static key rather
+    # than through anything sal decides while rendering. Which profiles are on
+    # is a VALUE in .env (COMPOSE_PROFILES), so `sal features disable observer`
+    # changes data and this file comes out the same for every deployment —
+    # which is what keeps it a file that can MOVE to the stack repo as a copy.
+    profiles: ["observer"]
     build: https://github.com/lpezet/secure-agent-lab.git#v1.9.0:stack/observer
     volumes:
       - audit-logs:/var/log/audit:ro
