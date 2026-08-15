@@ -18,7 +18,7 @@ exec sal init --stack-dir $FIXTURES/local-stack
 exec sal providers add widget --stack-dir $FIXTURES/local-stack
 
 exec sal drift --stack-dir $FIXTURES/local-stack
-stdout '^pinned\s+v1\.9\.0'
+stdout '^pinned\s+v1\.9\.2'
 
 # Every file it owns, from all three sources: the stack's own proxy addons, the
 # bank entry's files, and the compose file sal generated.
