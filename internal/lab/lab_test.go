@@ -393,3 +393,61 @@ func TestPointerAtDoesNotWalkUp(t *testing.T) {
 		t.Fatalf("PointerAt(%q) = %v, want fs.ErrNotExist", inner, err)
 	}
 }
+
+// The exact shape of generation 1 of the pointer, as COMPATIBILITY.md
+// publishes it.
+//
+// This file is COMMITTED into a user's git history, so it is read by whatever
+// sal they have next month and by everyone they work with. A field added here
+// travels into repositories and cannot be taken back, which is why the field
+// set is asserted rather than left to whoever edits the struct next.
+func TestThePointerFormatIsWhatIsPublished(t *testing.T) {
+	dir := t.TempDir()
+	if err := WritePointer(dir, Pointer{Name: "api-3f2a1b0c", StackTag: "v1.9.0"}); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := os.ReadFile(filepath.Join(dir, PointerDir, PointerFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"schema_version", "name", "stack_tag"} {
+		if _, present := raw[want]; !present {
+			t.Errorf("the pointer no longer carries %q", want)
+		}
+	}
+	if len(raw) != 3 {
+		t.Errorf("the pointer has %d fields, want exactly 3: %v\n"+
+			"A field added here is committed into other people's repositories. "+
+			"If this is deliberate, update COMPATIBILITY.md.", len(raw), raw)
+	}
+}
+
+// THE property of this file, and the reason it is the pointer rather than the
+// record that gets committed: it must describe no machine. A path, a username
+// or a home directory in here is one that travels to a colleague's checkout
+// and is wrong there.
+func TestThePointerDescribesNoMachine(t *testing.T) {
+	dir := t.TempDir()
+	if err := WritePointer(dir, Pointer{Name: "api-3f2a1b0c", StackTag: "v1.9.0"}); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := os.ReadFile(filepath.Join(dir, PointerDir, PointerFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"/", "\\", os.Getenv("HOME")} {
+		if forbidden == "" {
+			continue
+		}
+		if strings.Contains(string(body), forbidden) {
+			t.Errorf("the pointer contains %q, which describes this machine:\n%s", forbidden, body)
+		}
+	}
+}

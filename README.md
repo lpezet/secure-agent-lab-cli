@@ -123,5 +123,9 @@ Three layers, none of which needs Docker yet:
 - **`tests/fixtures/`** is a fake bank under invented provider names, plus a set
   of manifests that must be refused. See its README for what each one traps.
 
+`COMPATIBILITY.md` states what `sal` promises and what a version bump means —
+the command grammar, the two JSON formats, exit statuses, and what is
+deliberately not a promise.
+
 See `CLAUDE.md` for the decisions behind all of this and the reasoning that
 produced them.

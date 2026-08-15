@@ -763,10 +763,17 @@ major bump. The design is still settling, and 0.x says that out loud.
    deleted by the change that implemented the command, and once the last one
    went there was nothing left for it to guard.
 2. Both JSON formats declared stable at their current generation.
+   `COMPATIBILITY.md` is that declaration, and both formats are now locked by
+   tests that fail on a changed field set — `internal/deployment`'s
+   `TestTheRecordFormatIsWhatIsPublished` and `internal/lab`'s
+   `TestThePointerFormatIsWhatIsPublished`. What is left is time at generation
+   1 without another field being wanted.
 3. The `lab_setup` question resolved — fragments install today and nothing
    sources them, so `github` and `gcp` install without fully working.
 4. The install script exercised against a real published release.
 5. A written compatibility statement: this table, and what a major bump means.
+   Written, at `COMPATIBILITY.md`, and published before 1.0 on purpose — the
+   promises are cheaper to argue with while they can still change.
 
 ## Install
 
