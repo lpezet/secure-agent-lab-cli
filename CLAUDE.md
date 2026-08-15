@@ -207,6 +207,21 @@ loopback-only binding survives untouched. Keep the `127.0.0.1` prefix: observer
 publishes the audit trail over plain HTTP with no auth, and it is only safe
 because it is not reachable off the host.
 
+**`sal open` opens the LAB, and a dev container running for the same project
+is a warning rather than a redirect.** The two look identical from a terminal
+and are not the same thing: a dev container the operator brought themselves is
+not on the `lab` network, so it does not go out through the proxy and nothing
+it does reaches the audit trail. Opening it because it happened to be there
+would hand someone a shell they believe is inside the boundary when it is not.
+
+Telling them apart is a label, not a guess. The Dev Containers extension
+stamps `devcontainer.local_folder=<project>` on what it starts, so
+`docker ps` narrowed by that label answers "is there one for this project",
+and the same query narrowed again by `com.docker.compose.project=<lab>`
+answers "is it ours". What is in the first answer and not the second is
+foreign, and gets the warning. A dev container that IS the lab's own service
+needs no word — it is exactly where the command is about to put you.
+
 **A lab that is not running has no observer URL, and that is the whole
 answer.** Because the port comes from Docker rather than from anything `sal`
 stores, there is nowhere to look it up — a stopped lab has no published port at
@@ -685,8 +700,12 @@ first-class alternative rather than a footnote.
 
 ## Still open
 
-- **What `sal open` does when the current directory already has a
-  `.devcontainer`.**
+- **Whether `sal` should generate a `.devcontainer` for a project, and what it
+  does with one that is already there.** Deliberately tabbed for its own
+  release: nothing in the code integrates with VS Code today, so the question
+  costs nothing to leave open. What `sal open` does in the meantime is settled
+  and is under Non-obvious invariants — it opens the lab, and warns about a dev
+  container that is not it.
 
 ## Testing
 

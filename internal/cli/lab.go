@@ -380,15 +380,6 @@ func runnerFor(cmd *cobra.Command) (*lab.Lab, *compose.Runner, error) {
 	}, nil
 }
 
-func newOpenCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "open",
-		Short: "Open a shell in this project's lab",
-		Args:  cobra.ArbitraryArgs,
-		RunE:  notImplemented,
-	}
-}
-
 func newUpgradeCmd() *cobra.Command {
 	var (
 		to     string

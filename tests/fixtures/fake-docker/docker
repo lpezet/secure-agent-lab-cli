@@ -17,6 +17,7 @@
 #   docker compose version                    availability check
 #   docker compose ls --all --format json     state of every project
 #   docker compose -f FILE VERB...            one deployment
+#   docker ps --filter label=...              containers sal did not start
 #
 # Controlled by environment:
 #
@@ -33,6 +34,26 @@
 #   FAKE_DOCKER_PORT     what `compose -f FILE port observer 9000` answers.
 #                        Unset means the service has no container, which is how
 #                        a lab that is not running looks
+#   FAKE_DOCKER_LAB      what `compose -f FILE ps --quiet lab` answers. Unset
+#                        means the lab service is not up
+#   FAKE_DOCKER_PS       what `docker ps` answers for a label query
+#   FAKE_DOCKER_PS_OURS  what it answers when the query is narrowed to the
+#                        lab's own compose project
+
+# `docker ps` — not a compose call. sal uses it to find a container that is NOT
+# part of the deployment: a dev container VS Code started for this project.
+# FAKE_DOCKER_PS holds what it answers; a query narrowed to the lab's own
+# compose project answers FAKE_DOCKER_PS_OURS instead, which is how a script
+# says "that container belongs to something else".
+if [ "$1" = ps ]; then
+	case "$*" in
+	*com.docker.compose.project*) printf '%s' "${FAKE_DOCKER_PS_OURS:+$FAKE_DOCKER_PS_OURS
+}" ;;
+	*) printf '%s' "${FAKE_DOCKER_PS:+$FAKE_DOCKER_PS
+}" ;;
+	esac
+	exit 0
+fi
 
 [ "$1" = compose ] || exit 1
 
@@ -58,7 +79,15 @@ ls)
 		[ -n "$FAKE_DOCKER_PORT" ] && echo "$FAKE_DOCKER_PORT"
 		exit 0
 	fi
-	echo "fake docker: compose $verb $file"
+	# `ps --quiet <service>` is how sal asks whether a service has a container.
+	# Empty output is the shape docker has for one that does not.
+	if [ "$verb" = ps ]; then
+		[ -n "$FAKE_DOCKER_LAB" ] && echo "$FAKE_DOCKER_LAB"
+		exit 0
+	fi
+	# The whole invocation, not just the verb: `sal open` decides which command
+	# to run inside the lab, and that decision is only observable here.
+	echo "fake docker: $*"
 	;;
 *)
 	exit 1

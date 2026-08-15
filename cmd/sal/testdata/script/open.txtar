@@ -1,0 +1,82 @@
+# `sal open` — a shell in the lab container.
+#
+# The lab is the container on the internal network whose only way out is the
+# proxy, and whose traffic is in the audit trail. A shell anywhere else may look
+# identical and is not the same thing, which is what the dev-container case
+# below is about.
+
+[windows] skip 'the fake docker is a /bin/sh script'
+
+env PATH=$FIXTURES/fake-docker:$PATH
+env FAKE_DOCKER_LOG=$WORK/calls.log
+
+! exec sal open
+stderr 'no lab for this directory'
+
+cd project
+exec sal init --stack-dir $FIXTURES/local-stack
+
+# A lab that is not running gets a sentence naming `sal up`, not docker's own
+# message about a service with no container — which is accurate and tells
+# nobody what to do about it.
+! exec sal open
+stderr 'not running'
+stderr 'sal up'
+
+# And nothing was run against the deployment: asking whether the service is up
+# is not the same as opening a shell in it.
+! grep '^exec ' $WORK/calls.log
+
+# ------------------------------------------------------------------ running
+env FAKE_DOCKER_LAB=abc123
+
+exec sal open
+grep '^exec ' $WORK/calls.log
+
+# With no arguments it asks for a shell, trying bash and falling back to sh in
+# one invocation. Which shells a lab image has is the image's business — a
+# lab_setup fragment or a hand-written lab/Dockerfile can make it anything.
+stdout 'exec bash 2>/dev/null \|\| exec sh'
+
+# With arguments it runs those instead, and flags after the command belong to
+# the command rather than to sal.
+exec sal open ls -la /workspace
+stdout 'ls -la /workspace'
+! stderr 'unknown flag'
+
+# --------------------------------------------------- somebody else's container
+#
+# THE case this warning exists for. VS Code is running a dev container for this
+# project, and it is not part of this lab's compose project — so it is not on
+# the lab network, does not go out through the proxy, and nothing it does
+# reaches the audit trail.
+mkdir $WORK/project/.devcontainer
+env FAKE_DOCKER_PS=vsc-project-abcdef
+
+# Cleared first, so the assertion below is about THIS invocation rather than
+# one the log still remembers.
+rm $WORK/calls.log
+exec sal open
+stderr 'vsc-project-abcdef is also running for this project'
+stderr 'does not go out through the proxy'
+stderr 'reaches the audit trail'
+
+# A warning, never a redirect: the lab is still what gets opened, because that
+# is the one answer that is always right.
+stderr 'Opening the lab instead'
+grep '^exec ' $WORK/calls.log
+
+# A dev container that IS this lab's own service is not worth a word — it is
+# exactly where this command puts you.
+env FAKE_DOCKER_PS_OURS=vsc-project-abcdef
+exec sal open
+! stderr 'is also running for this project'
+
+# And with no .devcontainer at all, sal does not go looking. A project that
+# never had one cannot have a stray container from it.
+env FAKE_DOCKER_PS_OURS=
+rm $WORK/project/.devcontainer
+exec sal open
+! stderr 'is also running'
+
+-- project/.keep --

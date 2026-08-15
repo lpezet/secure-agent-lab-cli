@@ -5,9 +5,9 @@ Docker stack that runs autonomous agents without exposing long-lived
 credentials to the agent's process.
 
 > **Status: early, and pre-1.0 honestly.** `init`, `up`, `down`, `upgrade`,
-> `drift`, `providers add|list`, `secrets set|list`, `labs list|down` and
-> `observer open|tail` work against a real stack. `open`,
-> `providers create|remove` and `features` are still stubs that exit non-zero —
+> `drift`, `open`, `providers add|list`, `secrets set|list`, `labs list|down`
+> and `observer open|tail` work against a real stack. `providers create|remove`
+> and `features` are still stubs that exit non-zero —
 > deliberately, since a stub returning 0 would let a script believe a
 > credential was stored.
 
@@ -49,7 +49,8 @@ cd secure-agent-lab-cli && make build     # -> bin/sal
 
 ```
 sal init                     create a lab in this directory
-sal up | down | open         act on the lab in this directory
+sal up | down                act on the lab in this directory
+sal open                     a shell in the lab container, behind the proxy
 sal upgrade                  repin to a newer stack release AND update the files it owns
 sal drift                    report files that differ from the pinned release
 

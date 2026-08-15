@@ -128,6 +128,35 @@ func List(ctx context.Context) ([]Project, error) {
 	return projects, nil
 }
 
+// ContainerNames asks `docker ps` which running containers match the given
+// label filters, each spelled `key=value`.
+//
+// Not a compose call, and deliberately so: it is how sal finds a container
+// that is NOT part of the deployment — a dev container VS Code started for
+// this project, which carries the extension's own labels and belongs to no
+// compose project of ours. Reading it through `docker compose` would only find
+// the ones already known to be the lab's, which is the opposite of the
+// question being asked.
+func ContainerNames(ctx context.Context, labels ...string) ([]string, error) {
+	args := []string{"ps", "--format", "{{.Names}}"}
+	for _, l := range labels {
+		args = append(args, "--filter", "label="+l)
+	}
+
+	out, err := exec.CommandContext(ctx, "docker", args...).Output()
+	if err != nil {
+		return nil, fmt.Errorf("docker ps: %w", err)
+	}
+
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			names = append(names, line)
+		}
+	}
+	return names, nil
+}
+
 func dirOf(file string) string {
 	if i := strings.LastIndexByte(file, '/'); i > 0 {
 		return file[:i]
