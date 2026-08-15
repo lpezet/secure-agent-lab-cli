@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/lpezet/secure-agent-lab-cli/internal/bank"
+	"github.com/lpezet/secure-agent-lab-cli/internal/config"
 	"github.com/lpezet/secure-agent-lab-cli/internal/deployment"
 	"github.com/lpezet/secure-agent-lab-cli/internal/drift"
 	"github.com/lpezet/secure-agent-lab-cli/internal/installer"
@@ -82,7 +83,16 @@ func runDrift(cmd *cobra.Command, showDiff bool) error {
 	}
 	defer addons.Close()
 
-	expected, unresolved, owned := expectedFiles(b, addons.Dir, rec)
+	// An entry the operator wrote themselves is compared against their own
+	// providers directory. Comparing it against the bank would report every
+	// one of its files as an entry that cannot be resolved — which is a true
+	// statement about the bank and a wrong one about the deployment.
+	local, err := localBank()
+	if err != nil {
+		return err
+	}
+
+	expected, unresolved, owned := expectedFiles(b, local, addons.Dir, rec)
 
 	report, err := drift.Check(l.Dir, expected, owned)
 	if err != nil {
@@ -136,7 +146,7 @@ func runDrift(cmd *cobra.Command, showDiff bool) error {
 // resolved at all, and the paths those entries own — which must still count as
 // accounted for, or an entry sal cannot read would have all of its files
 // reported as if somebody smuggled them in.
-func expectedFiles(b *bank.Bank, addonsDir string, rec *deployment.Record) ([]drift.Expected, []drift.Finding, []string) {
+func expectedFiles(b, local *bank.Bank, addonsDir string, rec *deployment.Record) ([]drift.Expected, []drift.Finding, []string) {
 	var (
 		expected   []drift.Expected
 		unresolved []drift.Finding
@@ -169,7 +179,12 @@ func expectedFiles(b *bank.Bank, addonsDir string, rec *deployment.Record) ([]dr
 	}
 
 	for _, e := range rec.Installed {
-		plan, err := installer.BuildPlanAt(b, e.Name, e.Slot, rec.StackTag)
+		from, where := b, "bank/"+e.Name
+		if e.Source == deployment.SourceLocal {
+			from, where = local, "your providers/"+e.Name
+		}
+
+		plan, err := planFrom(from, e, rec.StackTag)
 		if err != nil {
 			// The record claims an entry this release cannot produce — a
 			// renamed entry, a removed one, a slot outside its band now. Every
@@ -178,7 +193,7 @@ func expectedFiles(b *bank.Bank, addonsDir string, rec *deployment.Record) ([]dr
 			unresolved = append(unresolved, drift.Finding{
 				Kind:   drift.Drift,
 				Path:   filepath.Join(deployment.Dir, deployment.RecordFile),
-				Detail: fmt.Sprintf("records %q, which cannot be resolved at this release: %v", e.Name, err),
+				Detail: fmt.Sprintf("records %q, which cannot be resolved from %s: %v", e.Name, sourceWord(e), err),
 			})
 			owned = append(owned, e.Files...)
 			continue
@@ -191,18 +206,50 @@ func expectedFiles(b *bank.Bank, addonsDir string, rec *deployment.Record) ([]dr
 			expected = append(expected, drift.Expected{
 				Path:  dst,
 				Src:   f.Src,
-				Owner: "bank/" + e.Name + "/" + path.Dir(dst) + "/",
+				Owner: where + "/" + path.Dir(dst) + "/",
 			})
 		}
 		for _, prev := range e.Files {
 			if !planned[filepath.ToSlash(prev)] {
-				expected = append(expected, drift.Expected{Path: filepath.ToSlash(prev), Owner: "bank/" + e.Name})
+				expected = append(expected, drift.Expected{Path: filepath.ToSlash(prev), Owner: where})
 			}
 		}
 	}
 
 	sort.Strings(owned)
 	return expected, unresolved, owned
+}
+
+// planFrom replans an installed entry against the tree it came from. A nil
+// bank is a providers directory that does not exist, which reads the same as
+// an entry that is no longer there.
+func planFrom(b *bank.Bank, e deployment.Entry, stackTag string) (*installer.Plan, error) {
+	if b == nil {
+		return nil, fmt.Errorf("there is no providers directory to read it from")
+	}
+	return installer.BuildPlanAt(b, e.Name, e.Slot, stackTag)
+}
+
+// localBank opens the operator's own providers directory, or nil when there is
+// none. Nil rather than an error: most deployments have no local entries, and
+// a missing directory is not a fault.
+func localBank() (*bank.Bank, error) {
+	dir, err := config.ProvidersDir()
+	if err != nil {
+		return nil, err
+	}
+	b, err := bank.OpenDir(dir)
+	if err != nil {
+		return nil, nil
+	}
+	return b, nil
+}
+
+func sourceWord(e deployment.Entry) string {
+	if e.Source == deployment.SourceLocal {
+		return "your providers directory"
+	}
+	return "the bank at this release"
 }
 
 // compareCompose checks the generated compose file against what sal would

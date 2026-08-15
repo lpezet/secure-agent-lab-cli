@@ -1,0 +1,158 @@
+# `sal providers remove` — the inverse of `add`, and the half that matters is
+# the cred-gateway config.
+#
+# Left behind, it keeps whitelisting a route to a broker provider that is gone:
+# a widened boundary that nothing else reports. Which is why removal works from
+# the RECORD — exactly the files .sal/installed.json says the entry wrote —
+# rather than from filenames.
+
+cd project
+
+# A name that is not installed is refused, with what is.
+! exec sal providers remove nosuchthing --stack-dir $FIXTURES/local-stack
+stderr 'not installed'
+stderr 'acme'
+
+# Spelled exactly. Two entries whose names share a prefix are where a guess
+# does damage, and the damage here is deleting a credential path in use.
+! exec sal providers remove acm --stack-dir $FIXTURES/local-stack
+stderr '"acm" is not installed'
+exists $WORK/.config/secure-agent-lab/labs/demo-lab/broker/acme.js
+
+# A dry run names every file and every variable, and removes none of them.
+exec sal providers remove acme --dry-run --stack-dir $FIXTURES/local-stack
+stdout '^acme — slot 010$'
+stdout 'delete   broker/acme\.js'
+stdout 'delete   proxy/010_acme\.py'
+stdout 'delete   cred-gateway/acme\.conf'
+stdout 'delete   lab/acme\.sh'
+
+# The variables come from the manifest, never from the provider's name — the
+# same rule that stops sal choosing a credential's destination.
+stdout 'unset    ACME_APP_ID'
+stdout 'unset    ACME_PRIVATE_KEY_PATH'
+stderr 'nothing was removed'
+exists $WORK/.config/secure-agent-lab/labs/demo-lab/cred-gateway/acme.conf
+grep '"name": "acme"' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
+
+# Now for real.
+exec sal providers remove acme --stack-dir $FIXTURES/local-stack
+stderr 'removed acme from demo-lab'
+
+# THE file. Everything else this deletes is inert once the broker provider is
+# gone; this one is a whitelist entry.
+! exists $WORK/.config/secure-agent-lab/labs/demo-lab/cred-gateway/acme.conf
+! exists $WORK/.config/secure-agent-lab/labs/demo-lab/broker/acme.js
+! exists $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/010_acme.py
+! exists $WORK/.config/secure-agent-lab/labs/demo-lab/lab/acme.sh
+
+# The record no longer claims it, which is also what frees the slot.
+! grep '"name": "acme"' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
+
+# Its variables go with it. Left behind, they describe a credential path that
+# no longer exists — and the ones naming secrets point into a directory sal
+# deliberately did not touch.
+! grep 'ACME_APP_ID' $WORK/.config/secure-agent-lab/labs/demo-lab/.env
+! grep 'ACME_PRIVATE_KEY_PATH' $WORK/.config/secure-agent-lab/labs/demo-lab/.env
+! grep 'ACME_CREDENTIAL_URL' $WORK/.config/secure-agent-lab/labs/demo-lab/lab.env
+
+# Another provider's configuration is not collateral damage.
+grep 'WIDGET_REGION=eu-west-1' $WORK/.config/secure-agent-lab/labs/demo-lab/.env
+
+# And a hand-written line survives, because Remove takes out keys rather than
+# rewriting the file.
+grep 'a note somebody left' $WORK/.config/secure-agent-lab/labs/demo-lab/.env
+
+# The credential itself stays. Removing a provider is reversible by
+# reinstalling it; deleting a credential is not, and they are different
+# decisions — so the path is printed and the file is left alone.
+exists $WORK/.config/secure-agent-lab/secrets/acme-app.pem
+stderr 'credentials were kept'
+stderr 'acme-app\.pem'
+
+# A file that looks like the entry's and that nothing recorded is LEFT, and
+# said out loud. Deleting an unrecorded file because its name matches is how a
+# removal takes out something somebody wrote by hand.
+exists $WORK/.config/secure-agent-lab/labs/demo-lab/cred-gateway/acme-legacy.conf
+stderr 'nothing recorded them'
+stderr 'acme-legacy\.conf'
+stderr 'keeps whitelisting'
+
+# The containers are still serving what was just removed, and it says so rather
+# than letting someone believe the boundary narrowed the moment the file went.
+stderr 'sal up'
+stderr 'still serving'
+
+# The slot is free again: a reinstall takes 010 back rather than climbing.
+exec sal providers add acme --dry-run --stack-dir $FIXTURES/local-stack
+stdout 'slot     010'
+
+# ------------------------------------- an entry the bank no longer carries
+#
+# Its files are recorded, so they go. Its variables are not, so they stay and
+# are reported — the alternative is deriving them from the provider's name,
+# which is the per-provider knowledge this repo has none of.
+cd $WORK/orphaned
+exec sal providers remove gone --stack-dir $FIXTURES/local-stack
+! exists $WORK/.config/secure-agent-lab/labs/orphaned-lab/proxy/010_gone.py
+stderr 'could not be read from the bank'
+stderr 'still in \.env'
+
+-- project/.sal/lab.json --
+{"schema_version": 1, "name": "demo-lab", "stack_tag": "v1.9.0"}
+-- orphaned/.sal/lab.json --
+{"schema_version": 1, "name": "orphaned-lab", "stack_tag": "v1.9.0"}
+-- .config/secure-agent-lab/secrets/acme-app.pem --
+-----BEGIN PRIVATE KEY-----
+not a real one
+-----END PRIVATE KEY-----
+-- .config/secure-agent-lab/labs/demo-lab/compose.yaml --
+name: demo-lab
+-- .config/secure-agent-lab/labs/demo-lab/.sal/installed.json --
+{
+  "schema_version": 1,
+  "stack_tag": "v1.9.0",
+  "installed": [
+    {
+      "name": "acme",
+      "slot": 10,
+      "schema_version": 1,
+      "stack_tag": "v1.9.0",
+      "files": ["broker/acme.js", "proxy/010_acme.py", "cred-gateway/acme.conf", "lab/acme.sh"]
+    }
+  ]
+}
+-- .config/secure-agent-lab/labs/demo-lab/broker/acme.js --
+// installed from the bank
+-- .config/secure-agent-lab/labs/demo-lab/proxy/010_acme.py --
+# installed from the bank
+-- .config/secure-agent-lab/labs/demo-lab/cred-gateway/acme.conf --
+location = /acme/credential { proxy_pass http://broker:8080; }
+-- .config/secure-agent-lab/labs/demo-lab/cred-gateway/acme-legacy.conf --
+location = /acme/legacy { proxy_pass http://broker:8080; }
+-- .config/secure-agent-lab/labs/demo-lab/lab/acme.sh --
+#!/bin/sh
+-- .config/secure-agent-lab/labs/demo-lab/.env --
+# a note somebody left by hand
+ACME_APP_ID=12345
+ACME_REGION=us-east-1
+ACME_PRIVATE_KEY_PATH=/secrets/acme-app.pem
+ACME_WEBHOOK_SECRET_PATH=/secrets/acme-webhook.txt
+WIDGET_REGION=eu-west-1
+-- .config/secure-agent-lab/labs/demo-lab/lab.env --
+ACME_CREDENTIAL_URL=http://cred-gateway/acme/credential
+ACME_IDENTITY_URL=http://cred-gateway/acme/identity
+-- .config/secure-agent-lab/labs/orphaned-lab/compose.yaml --
+name: orphaned-lab
+-- .config/secure-agent-lab/labs/orphaned-lab/.sal/installed.json --
+{
+  "schema_version": 1,
+  "stack_tag": "v1.9.0",
+  "installed": [
+    {"name": "gone", "slot": 10, "schema_version": 1, "files": ["proxy/010_gone.py"]}
+  ]
+}
+-- .config/secure-agent-lab/labs/orphaned-lab/proxy/010_gone.py --
+# from a bank entry that no longer exists
+-- .config/secure-agent-lab/labs/orphaned-lab/.env --
+GONE_TOKEN_PATH=/secrets/gone.token

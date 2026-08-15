@@ -72,6 +72,22 @@ func LabsDir() (string, error) {
 	return subdir("labs")
 }
 
+// ProvidersDir returns the root under which locally authored bank entries
+// live, one directory per entry, laid out exactly like the bank's own.
+//
+// Out of the project for the same reason a deployment is, and it matters more
+// here rather than less: an entry in this directory is code that will run
+// behind the credential boundary once installed, so a scaffold inside the
+// workspace would be one the agent could edit before an operator installed it.
+//
+// The layout is the bank's, not one of sal's own, so a provider written here
+// is one that can be proposed to the bank unchanged — and so that sal reads it
+// with the same code that reads the bank, rather than a second path that could
+// disagree about what an entry is.
+func ProvidersDir() (string, error) {
+	return subdir("providers")
+}
+
 func subdir(name string) (string, error) {
 	dir, err := Dir()
 	if err != nil {
