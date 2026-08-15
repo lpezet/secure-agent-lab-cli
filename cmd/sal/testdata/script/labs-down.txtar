@@ -1,0 +1,146 @@
+# `sal labs down` is the other half of `sal labs list`.
+#
+# That command finds a lab running for a project that was deleted. This is what
+# stops it — `sal down` cannot, because it needs a project to find the lab
+# from, and that is precisely what is missing. So the case that reads like an
+# edge case here is the one the command exists for.
+#
+# Docker is faked with tests/fixtures/fake-docker first on PATH, which logs
+# every `compose -f FILE VERB` it is given so the script can assert which labs
+# were acted on.
+
+[windows] skip 'the fake docker is a /bin/sh script'
+
+env PATH=$FIXTURES/fake-docker:$PATH
+env FAKE_DOCKER_LS=$WORK/state.json
+env FAKE_DOCKER_LOG=$WORK/calls.log
+
+# Neither names nor --all is refused rather than assumed to mean everything: a
+# machine-wide action nobody typed is the one shape this must not have.
+! exec sal labs down
+stderr 'name a lab to stop, or pass --all'
+
+# And it names the shorter way for the ordinary case, so the answer to "I just
+# want to stop the one I am working on" is not --all.
+stderr 'sal down'
+
+# Both is a contradiction, not a refinement.
+! exec sal labs down demo-lab --all
+stderr 'not both'
+
+# A name is spelled exactly. Two projects called `api` are what the hash suffix
+# exists to keep apart, so a prefix would be ambiguous exactly where it matters.
+! exec sal labs down demo
+stderr 'no lab named "demo"'
+stderr 'sal labs list'
+
+! exec sal labs down nosuchlab
+stderr 'no lab named "nosuchlab"'
+
+# A directory under labs/ that is not a deployment has nothing to drive compose
+# with, and says so rather than failing inside docker.
+! exec sal labs down junk
+stderr 'no compose file'
+
+# Nothing was run for any of those.
+! exists calls.log
+
+# THE case. demo-lab's project was deleted, so `sal down` has no way to reach
+# it — this does, by name, from anywhere.
+exec sal labs down demo-lab
+stderr 'stopping demo-lab \(running\(6\)\)'
+stderr 'stopped 1 lab, 1 of which was running\.'
+
+# It ran `down` and nothing else. Not `down --volumes`: the audit trail is the
+# record of what the agent did, and this command never destroys it.
+grep '^down .*[/\\]demo-lab[/\\]compose\.yaml$' calls.log
+! grep 'volumes' calls.log
+
+# There is no --volumes to pass, either. Deleting one trail is a decision;
+# deleting every trail on a machine is a decision made once and applied to
+# things the operator was not thinking about.
+! exec sal labs down demo-lab --volumes
+stderr 'unknown flag'
+
+# --all covers every lab Docker has containers for, running or merely exited —
+# `down` removes both. A lab Docker has never heard of is skipped, because
+# there is genuinely nothing to do for it.
+rm calls.log
+exec sal labs down --all
+stderr 'stopping demo-lab \(running\(6\)\)'
+stderr 'stopping other-lab \(exited\(6\)\)'
+! stderr 'stopping untouched-lab'
+
+# The count that matters is how many were LIVE — each of those was a
+# credential-injecting proxy with the secrets directory mounted.
+stderr 'stopped 2 labs, 1 of which was running\.'
+
+# One lab that will not stop does NOT abandon the rest. This is the opposite of
+# `sal upgrade`, where a partial run leaves half a deployment on each of two
+# releases — here a partial run just leaves fewer labs running, and refusing to
+# continue would leave MORE of them up, which is the opposite of the ask.
+rm calls.log
+env FAKE_DOCKER_FAIL=demo-lab
+! exec sal labs down --all
+stderr '1 lab would not stop: demo-lab'
+
+# And the live-lab count is of labs actually stopped. demo-lab was the running
+# one and it refused, so claiming a running lab was closed would report the
+# opposite of what happened — it is STILL running.
+stderr 'stopped 1 lab\.'
+! stderr 'of which was running'
+
+# The one after the failure still ran.
+grep '^down .*[/\\]other-lab[/\\]compose\.yaml$' calls.log
+env FAKE_DOCKER_FAIL=
+
+# Nothing running is not an error, and says what it found rather than
+# pretending it acted.
+env FAKE_DOCKER_LS=$WORK/nothing.json
+exec sal labs down --all
+stderr 'nothing to stop'
+
+# But a compose project running out of the labs directory with no deployment
+# behind it is still reported, because that is the one this command cannot
+# reach and the operator has to know it is there.
+env FAKE_DOCKER_LS=$WORK/orphan.json
+exec sal labs down --all
+stderr 'no deployment there'
+stderr 'ghost-lab'
+
+# An unreachable Docker is FATAL here, unlike `sal labs list` — that command
+# still has an inventory to report from the filesystem, this one has nothing to
+# do without a daemon and must not exit 0 having stopped nothing.
+env FAKE_DOCKER_BROKEN=1
+! exec sal labs down --all
+stderr 'compose plugin is missing or the daemon is unreachable'
+! exec sal labs down demo-lab
+stderr 'compose plugin is missing or the daemon is unreachable'
+
+-- nothing.json --
+[]
+-- state.json --
+[
+  {"Name": "demo-lab", "Status": "running(6)", "ConfigFiles": "@LABS@/demo-lab/compose.yaml"},
+  {"Name": "other-lab", "Status": "exited(6)", "ConfigFiles": "@LABS@/other-lab/compose.yaml"}
+]
+-- orphan.json --
+[{"Name": "ghost-lab", "Status": "running(6)", "ConfigFiles": "@LABS@/ghost-lab/compose.yaml"}]
+-- .config/secure-agent-lab/labs/junk/.keep --
+-- .config/secure-agent-lab/labs/demo-lab/compose.yaml --
+name: demo-lab
+-- .config/secure-agent-lab/labs/demo-lab/.sal/installed.json --
+{
+  "schema_version": 1,
+  "stack_tag": "v1.9.0",
+  "project_dir": "/nonexistent/deleted-project",
+  "installed": []
+}
+-- .config/secure-agent-lab/labs/other-lab/compose.yaml --
+name: other-lab
+-- .config/secure-agent-lab/labs/other-lab/.sal/installed.json --
+{"schema_version": 1, "stack_tag": "v1.9.0", "installed": []}
+-- .config/secure-agent-lab/labs/untouched-lab/compose.yaml --
+name: untouched-lab
+-- .config/secure-agent-lab/labs/untouched-lab/.sal/installed.json --
+{"schema_version": 1, "stack_tag": "v1.9.0", "installed": []}

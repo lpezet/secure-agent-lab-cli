@@ -59,6 +59,7 @@ sal secrets list             what is stored, what is loose, what nothing claims
 sal features enable NAME     lifecycle verbs, uniform across every feature
 sal observer open | tail     read the audit trail
 sal labs list                what is running on this machine with credentials attached
+sal labs down NAME | --all   stop one from anywhere, or every one of them
 ```
 
 ## Two things worth knowing
@@ -69,7 +70,9 @@ so a `sal` on `PATH` inside the lab would hand the agent a supported interface
 for widening its own allowlist.
 
 **A forgotten lab is not idle.** It is a live credential-injecting proxy with
-the secrets directory mounted. That is what `sal labs list` is for.
+the secrets directory mounted. That is what `sal labs list` is for, and
+`sal labs down` is how you stop one whose project no longer exists — the case
+`sal down` cannot reach, because it finds a lab from a project.
 
 **`sal` knows nothing about any provider, including its credentials.**
 `sal secrets set anthropic` asks for an OAuth token and then an API key, in that
