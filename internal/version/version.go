@@ -4,6 +4,8 @@ package version
 import (
 	"runtime/debug"
 	"strings"
+
+	"github.com/lpezet/secure-agent-lab-cli/internal/stackver"
 )
 
 // version is stamped at release time with:
@@ -41,10 +43,45 @@ const MinimumStack = "1.9.2"
 // depend on when it happened to be created. --stack overrides it, and the
 // value is printed at init so the choice is never silent.
 //
-// v1.9.2 rather than v1.9.0 because of the same bypass MinimumStack names:
-// pinning a NEW lab to a release with a known credential-exposure bug is the
-// worst version of that default being stale.
-const DefaultStack = "v1.9.2"
+// It moved to v1.9.2 for the bypass MinimumStack names — pinning a NEW lab to
+// a release with a known credential-exposure bug is the worst version of a
+// stale default — and to v1.10.1 once sal could create a deployment shaped the
+// way that release expects: see AddonsBakedFrom.
+const DefaultStack = "v1.10.1"
+
+// AddonsBakedFrom is the first stack release whose proxy IMAGE carries the
+// base addons — 000_policy.py and 001_allowlist.py — at
+// /opt/agent-proxy/addons/, loaded ahead of the /addons mount a deployment
+// provides.
+//
+// Below it, a deployment that does not vendor them has no internal-host block
+// at all: the proxy sits on both networks, so with no policy addon loaded it
+// forwards to the broker and the cred-gateway whitelist can be walked around
+// entirely. That is the hole the stack closed by baking them in.
+//
+// At or above it, vendoring is the opposite of a control: the image's copy
+// wins, and the deployment's is skipped with a warning naming the file.
+const AddonsBakedFrom = "1.10.0"
+
+// StackBakesAddons reports whether a release carries the base proxy addons in
+// its image, so a deployment must not vendor them.
+//
+// A tag this cannot parse answers false, which vendors them. That is the
+// direction that fails closed — a vendored copy at a release that bakes them
+// is dead weight, while a missing one below that release is a missing control
+// — and it is the same choice scripts/check-drift.sh makes for a pin that is
+// not a release tag.
+func StackBakesAddons(tag string) bool {
+	have, err := stackver.Parse(tag)
+	if err != nil {
+		return false
+	}
+	from, err := stackver.Parse(AddonsBakedFrom)
+	if err != nil {
+		return false
+	}
+	return !have.Less(from)
+}
 
 // CLI returns this binary's own version. It is deliberately separate from the
 // stack tag: `sal --version` prints both, because "I am four versions behind"

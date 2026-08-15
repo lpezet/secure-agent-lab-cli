@@ -143,6 +143,25 @@ helper** — each is wrong at either of the others' severity:
 | `min_stack` above the deployment's pinned tag | manifest | **refuse at install** — otherwise silent now, fatal at runtime |
 | deployment's tag below `sal`'s declared minimum | this CLI | **warn** (contract item 3) |
 
+**The base proxy addons are the deployment's business only below stack
+1.10.0.** Under that release the image carries nothing and a deployment that
+does not vendor `000_policy.py` has no internal-host block at all — the proxy
+sits on both networks, so with no policy addon loaded it forwards to the broker
+and the cred-gateway whitelist can be walked around entirely. `sal init`
+therefore fetches and vendors them, and refuses outright if it cannot.
+
+From 1.10.0 the proxy image carries both at `/opt/agent-proxy/addons/` and
+loads them ahead of the `/addons` mount, so a vendored copy is not a smaller
+control but none: the image's wins and the deployment's is skipped with a
+warning naming the file. So `init` stops vendoring, `upgrade` DELETES what a
+lab already vendored on the way past, and `drift` inverts — below the line an
+unvendored addon is MISSING, at or above it a vendored one is a note.
+
+`version.StackBakesAddons` is the one place that line is drawn, and a tag it
+cannot parse takes the vendoring branch. That is the direction which fails
+closed, and it is the same choice `scripts/check-drift.sh` makes for a pin that
+is not a release tag.
+
 **Record what was installed in `.sal/installed.json`** in the deployment — name,
 assigned `NNN`, files written — and the **resolved commit SHA** alongside the
 stack tag: a tag is mutable, so the tag alone does not say what was actually

@@ -10,17 +10,19 @@ cd project
 exec sal init --stack-dir $FIXTURES/local-stack
 stdout '^lab\s+project-[0-9a-f]{8}$'
 stdout '^at\s+.*[/\\]labs[/\\]project-[0-9a-f]{8}$'
-stdout '^stack\s+v1\.9\.2'
+stdout '^stack\s+v1\.10\.1'
 stdout '^project\s+'
 
-# The stack's own proxy addons are installed, not just bank entries. Without
-# 000_policy.py the proxy forwards to the broker, and the lab can walk around
-# the cred-gateway whitelist entirely.
-stdout '^addon\s+000_policy\.py$'
-stdout '^addon\s+001_allowlist\.py$'
+# At 1.10.0 and above the proxy IMAGE carries 000_policy.py and
+# 001_allowlist.py and loads them ahead of the /addons mount, so a deployment
+# that vendored them would be carrying files the entrypoint skips with a
+# warning. Said out loud rather than left as an absence: a reader who knows the
+# older shape would otherwise wonder which control went missing.
+! stdout '^addon\s+000_policy\.py$'
+stdout 'addons   carried by the proxy image at v1\.10\.1, not vendored here'
 
 # The default release is stated, never silent.
-stderr 'pinning to stack v1\.9\.2'
+stderr 'pinning to stack v1\.10\.1'
 stderr '--stack'
 
 # Reading a local checkout means the release went unverified, so no commit is
@@ -30,7 +32,7 @@ stderr 'sal providers add'
 
 # The project keeps only a pointer — no absolute paths, so it can be committed.
 exists .sal/lab.json
-grep '"stack_tag": "v1.9.2"' .sal/lab.json
+grep '"stack_tag": "v1.10.1"' .sal/lab.json
 grep '"name": "project-' .sal/lab.json
 ! grep '/' .sal/lab.json
 
@@ -39,7 +41,7 @@ grep '"name": "project-' .sal/lab.json
 ! exists .sal/installed.json
 
 exec sal version
-stdout '^stack\s+v1\.9\.2$'
+stdout '^stack\s+v1\.10\.1$'
 
 # A virgin lab has no PROVIDERS, even though it has addons — the two are
 # recorded separately, because a stack addon is not a bank entry and
@@ -68,15 +70,39 @@ exec sal init --stack-dir $FIXTURES/local-stack
 stdout '^lab\s+project-[0-9a-f]{8}$'
 stderr 'nested inside one tree'
 
-# A checkout with no addons directory REFUSES rather than creating a lab whose
-# proxy would forward to the broker. "Created but not safe yet" is not a state
-# worth being able to reach.
+# Below 1.10.0, a checkout with no addons directory REFUSES rather than
+# creating a lab whose proxy would forward to the broker. "Created but not safe
+# yet" is not a state worth being able to reach.
+#
+# Pinned explicitly, because this stopped being true at the default: from
+# 1.10.0 the image carries the addons, so a stack tree without them is not a
+# deployment missing a control — it is a deployment that never needed the files.
 cd $WORK/no-addons-project
-! exec sal init --stack-dir $WORK/hollow-stack
+! exec sal init --stack v1.9.2 --stack-dir $WORK/hollow-stack
 stderr 'no barrier between the lab container and the broker'
 ! exists .sal/lab.json
 
+# And at the default, the same hollow checkout is simply not a problem.
+exec sal init --stack-dir $WORK/hollow-stack
+stdout 'carried by the proxy image'
+exists .sal/lab.json
+
+
+# ------------------------------------------------ below the line, it vendors
+#
+# Under 1.10.0 the image carries nothing, and a deployment that does not vendor
+# 000_policy.py has no internal-host block at all: the proxy sits on both
+# networks, so with no policy addon loaded it forwards to the broker and the
+# cred-gateway whitelist can be walked around entirely.
+cd $WORK/older
+exec sal init --stack v1.9.2 --stack-dir $FIXTURES/local-stack
+stdout '^stack\s+v1\.9\.2'
+stdout '^addon\s+000_policy\.py$'
+stdout '^addon\s+001_allowlist\.py$'
+! stdout 'carried by the proxy image'
+
 -- project/.keep --
+-- older/.keep --
 -- other/.keep --
 -- no-addons-project/.keep --
 -- hollow-stack/bank/.keep --

@@ -31,7 +31,9 @@ type UpgradePlan struct {
 
 	Entries []EntryUpgrade
 
-	// addonsDir holds the new release's proxy addons.
+	// addonsDir holds the new release's proxy addons, or is EMPTY when that
+	// release carries them in the proxy image instead. Empty is not "none
+	// found": it is the deployment no longer being the place they live.
 	addonsDir string
 
 	// BaseAddons are the addon filenames the new release ships.
@@ -86,9 +88,16 @@ func BuildUpgradePlan(b *bank.Bank, addonsDir string, rec *deployment.Record, to
 			toTag, len(problems), strings.Join(problems, "\n  - "))
 	}
 
-	addons, err := listAddons(addonsDir)
-	if err != nil {
-		return nil, err
+	// A release that bakes the addons ships none TO the deployment, so
+	// everything the lab vendors becomes stale and is deleted below. A file
+	// that reads as a control it no longer is misleads whoever reads it next,
+	// and the image ignores it either way.
+	var addons []string
+	if addonsDir != "" {
+		var err error
+		if addons, err = listAddons(addonsDir); err != nil {
+			return nil, err
+		}
 	}
 	u.BaseAddons = addons
 	u.StaleAddons = missingFrom(rec.BaseAddons, addons)
