@@ -250,8 +250,13 @@ func (l *Lab) Exists() bool {
 	return err == nil
 }
 
+// ComposeName is the compose file's name within a deployment. Named because
+// `sal drift` reports it as a path relative to the deployment, and the two
+// must not be able to disagree.
+const ComposeName = "compose.yaml"
+
 // ComposeFile is the path commands pass to `docker compose -f`.
-func (l *Lab) ComposeFile() string { return filepath.Join(l.Dir, "compose.yaml") }
+func (l *Lab) ComposeFile() string { return filepath.Join(l.Dir, ComposeName) }
 
 // WritePointer writes <project>/.sal/lab.json.
 func WritePointer(projectDir string, p Pointer) error {

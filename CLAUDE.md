@@ -331,6 +331,39 @@ therefore its load order, and load order is a security property. And one
 provider that cannot make the move refuses the WHOLE upgrade: half a deployment
 on each of two releases is a boundary nobody can describe.
 
+**`sal drift` asks about the PIN, not about the newest release.** "Is this lab
+what it claims to be?" and "what would moving change?" are different questions,
+and the second already has a command: `sal upgrade --dry-run`. Keeping them
+apart is what lets `drift` be a CI step — it exits non-zero on any finding, and
+a check that also fired every time upstream released would be one nobody could
+leave switched on.
+
+It compares against the recorded **commit**, not the tag, for the same reason
+every other command does: a tag can move, and drift measured against a moved
+tag is the tag's, not the deployment's.
+
+**`sal drift` is stricter than `check-drift.sh` about a file nobody owns, and
+only because it knows more.** That script calls an unrecognised file `custom`
+and passes it, which is right for a deployment assembled by hand — there, a
+file with no upstream counterpart is ordinary. In a sal-managed deployment
+every boundary file arrived through `sal init` or `sal providers add` and was
+written down, so one that no record accounts for arrived some other way. The
+thing most likely to have put an extra `.conf` in `cred-gateway/` is the agent
+the boundary exists to contain, so it is a finding and it fails the check.
+
+The scan covers exactly the three bind-mounted directories. **`lab/` is
+deliberately not one of them**: it is the operator's build context and its
+`Dockerfile` is theirs by design, so judging its contents would report their
+own file as an intrusion. A `lab_setup` fragment inside it is still *compared*,
+because it arrives as an expected file like any other — comparing what we know
+about and judging what we do not are different operations.
+
+**The generated `compose.yaml` is compared too**, against a fresh render rather
+than against a file in the release. It is the least contractual of the three
+formats and it is still where the loopback-only observer publish, the
+`internal: true` lab network and every mount live — so an edit there is a
+change to the boundary that no other check in this repo would see.
+
 **A function that reads state must not quietly write it.** Slot observation
 once appended what it found on disk to the install record, and its caller saved
 that record — writing the stack's own proxy addons into `installed.json` as if
