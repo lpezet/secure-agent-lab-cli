@@ -22,16 +22,21 @@ INSTALL_DIR="${SAL_INSTALL_DIR:-$HOME/.local/bin}"
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 note() { printf '%s\n' "$*" >&2; }
 
-for tool in curl tar mktemp; do
+for tool in curl tar mktemp awk; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
 done
 
 # sha256sum on Linux, shasum on macOS. One of them must exist: an install that
 # skipped verification because the tool was missing would be worse than none.
+#
+# Only `-c`, and the output thrown away rather than silenced with a flag. The
+# three implementations do not agree on anything else: GNU has --status and no
+# -s, busybox has -s and no long options at all, and Alpine's sha256sum is
+# busybox. Redirecting needs no flag and works on all three.
 if command -v sha256sum >/dev/null 2>&1; then
-  sha_check() { sha256sum --check --ignore-missing --status "$1"; }
+  sha_check() { sha256sum -c "$1" >/dev/null 2>&1; }
 elif command -v shasum >/dev/null 2>&1; then
-  sha_check() { shasum -a 256 --check --ignore-missing --status "$1"; }
+  sha_check() { shasum -a 256 -c "$1" >/dev/null 2>&1; }
 else
   die "neither sha256sum nor shasum found, so the download cannot be verified"
 fi
@@ -66,22 +71,39 @@ curl -fsSL -o "${tmp}/${archive}" "${base}/${archive}" \
 curl -fsSL -o "${tmp}/checksums.txt" "${base}/checksums.txt" \
   || die "release ${VERSION} publishes no checksums.txt; refusing to install unverified"
 
+# A Sigstore bundle: one file carrying the signature, the certificate and the
+# transparency-log entry. cosign v3 removed the flags that produced and checked
+# a detached .sig plus .pem, so an older cosign cannot verify this and says so
+# rather than appearing to.
 if command -v cosign >/dev/null 2>&1; then
-  curl -fsSL -o "${tmp}/checksums.txt.sig" "${base}/checksums.txt.sig"
-  curl -fsSL -o "${tmp}/checksums.txt.pem" "${base}/checksums.txt.pem"
-  cosign verify-blob "${tmp}/checksums.txt" \
-    --signature "${tmp}/checksums.txt.sig" \
-    --certificate "${tmp}/checksums.txt.pem" \
+  curl -fsSL -o "${tmp}/checksums.txt.bundle" "${base}/checksums.txt.bundle" \
+    || die "release ${VERSION} publishes no checksums.txt.bundle; refusing to install unverified"
+  if cosign verify-blob "${tmp}/checksums.txt" \
+    --bundle "${tmp}/checksums.txt.bundle" \
     --certificate-identity-regexp "https://github.com/${REPO}/.*" \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    >/dev/null 2>&1 || die "signature over checksums.txt did not verify"
-  note "signature verified"
+    >/dev/null 2>&1; then
+    note "signature verified"
+  else
+    die "signature over checksums.txt did not verify.
+  If your cosign is older than v3 it cannot read this bundle format — upgrade it,
+  or verify by hand from https://github.com/${REPO}/releases/tag/${VERSION}"
+  fi
 else
   note "cosign not found — checksum verified, signature NOT checked."
   note "  to check it: https://github.com/${REPO}/releases/tag/${VERSION}"
 fi
 
-( cd "$tmp" && sha_check checksums.txt ) || die "checksum mismatch for ${archive}"
+# The checksums file covers every platform's archive and only one was
+# downloaded, so the line for it is picked out rather than passing
+# --ignore-missing — another GNU option busybox does not have. Doing it this
+# way also makes the "no line for this archive at all" case an explicit refusal
+# instead of something inferred from a checker's exit status.
+awk -v want="$archive" '{ name = $2; sub(/^\*/, "", name); if (name == want) print }' \
+  "${tmp}/checksums.txt" > "${tmp}/expected.txt"
+[ -s "${tmp}/expected.txt" ] || die "checksums.txt has no entry for ${archive}"
+
+( cd "$tmp" && sha_check expected.txt ) || die "checksum mismatch for ${archive}"
 note "checksum verified"
 
 tar -xzf "${tmp}/${archive}" -C "$tmp" sal

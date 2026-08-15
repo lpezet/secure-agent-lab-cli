@@ -712,7 +712,15 @@ Consequences worth stating, since each had a plausible alternative:
 - **Shell out to `docker compose`. Do not link `compose-go` or the Docker SDK.**
   The compose file in the stack repo is the source of truth and its semantics
   are enormous; the `docker` CLI is the stable contract. It also means `sal`
-  never needs the Docker socket itself.
+  never needs the Docker socket itself. `tests/compose/run.sh` is what
+  makes "the CLI is the stable contract" a checked claim: it pins the
+  behaviours sal's code assumes — profile selection from `.env` and from
+  `--profile`, `config --profiles`, the `port` read-back and its failure shape,
+  what `ps --quiet` answers for a service with no container — against the real
+  binary. Every one of them was written from documentation first, and one was
+  wrong: `docker compose rm` CAN remove a service whose profile is not enabled,
+  as long as the service is named. sal passes `--profile` anyway, because that
+  behaviour is compose's to change and nothing here should depend on it.
 - **Fetch the bank over HTTPS, not git.** `net/http` + `archive/tar` +
   `compress/gzip` against `codeload.github.com/.../tar/refs/tags/<tag>` — no git
   dependency on the user's machine, which is what contract item 2 asks for.
@@ -763,10 +771,17 @@ major bump. The design is still settling, and 0.x says that out loud.
    deleted by the change that implemented the command, and once the last one
    went there was nothing left for it to guard.
 2. Both JSON formats declared stable at their current generation.
+   `COMPATIBILITY.md` is that declaration, and both formats are now locked by
+   tests that fail on a changed field set — `internal/deployment`'s
+   `TestTheRecordFormatIsWhatIsPublished` and `internal/lab`'s
+   `TestThePointerFormatIsWhatIsPublished`. What is left is time at generation
+   1 without another field being wanted.
 3. The `lab_setup` question resolved — fragments install today and nothing
    sources them, so `github` and `gcp` install without fully working.
 4. The install script exercised against a real published release.
 5. A written compatibility statement: this table, and what a major bump means.
+   Written, at `COMPATIBILITY.md`, and published before 1.0 on purpose — the
+   promises are cheaper to argue with while they can still change.
 
 ## Install
 
@@ -788,6 +803,37 @@ rewritten by `sal upgrade`.
 will say so. Cheap mitigations, all worth doing: publish a checksum, keep the
 script short enough to actually read, and document clone-and-inspect as a
 first-class alternative rather than a footnote.
+
+**The mitigations are only worth something if they REFUSE**, so `tests/install/`
+produces each refusal rather than assuming it: a tampered archive, a release
+with no `checksums.txt`, a signature that does not verify, an architecture
+there is no build for. `curl` and `cosign` are fakes first on `PATH` — the same
+technique the txtar scripts use for `docker` — so it needs no network and no
+published release.
+
+That harness pins `PATH` to its own fakes plus `/usr/bin:/bin`, and that is a
+correctness property rather than hygiene: whether `install.sh` takes the cosign
+branch is decided by whether cosign is ON `PATH`, so inheriting the developer's
+would decide which half of the script is under test. On a machine with cosign
+installed, the "signature NOT checked" path would never run at all. Not
+hypothetical — it is how this harness's first run passed a test it was not
+running.
+
+**Signing produces a Sigstore BUNDLE, and verifying needs cosign v3.** Not a
+preference: cosign v3 removed `--output-signature` and `--output-certificate`
+from `sign-blob`, and removed `--signature` and `--certificate` from
+`verify-blob`, so the previous detached `.sig` + `.pem` pair could no longer be
+produced *or* checked. The release workflow pins the cosign version for the
+same reason — the signing flags in `.goreleaser.yaml` and the verify flags in
+`install.sh` are v3's, and a silent jump across that line breaks releases at
+the one moment nobody is watching. `make snapshot` skips signing, because
+keyless signing needs an OIDC token only CI has.
+
+**Every 0.x release is marked a pre-release**, rather than left to GoReleaser's
+`auto` — which only looks at the tag's suffix and would publish `v0.2.0` as a
+full release. The README says the design is still settling and the two on-disk
+formats are not declared stable; the release page must not say otherwise. This
+becomes `auto` at 1.0.
 
 ## Still open
 
@@ -856,6 +902,26 @@ order across the two streams*, txtar is the wrong layer.
 non-root, catches what actually breaks — arch detection, busybox `tar`,
 `sha256sum` vs `shasum`, which PATH directory is writable — and needs no Docker
 inside the container.
+
+Both halves of that exist. `tests/install/run.sh` is the LOGIC — the refusals,
+the resolution, what it says — and runs anywhere, with `curl` and `cosign`
+faked on `PATH` and `HOME` pointed at scratch so a run cannot reach the
+operator's own `sal`. `tests/install/containers.sh` runs that same file inside
+`debian:stable-slim`, `ubuntu:24.04` and `bash:5` (Alpine-based, so busybox
+`tar` and busybox `sha256sum`), as root and as an ordinary user, with
+`--network none` and the checkout mounted read-only.
+
+It found what it was built to find: `--ignore-missing` and `--status` are GNU
+spellings that busybox does not have, and `-s` is a *shasum* spelling that GNU
+`sha256sum` does not have. So `install.sh` now uses `-c` alone, throws the
+output away rather than asking for quiet, and picks the checksum line for its
+own archive with `awk` instead of passing `--ignore-missing`. That last change
+also turns "the checksums file has no line for this archive" into an explicit
+refusal rather than something inferred from a checker's exit status.
+
+Note what the container tier does NOT do: no Docker socket is mounted and
+nothing starts a lab. It runs a shell script against a filesystem, which is why
+a container is right here and wrong for the lifecycle — see the warning below.
 
 ⚠️ **Do not test the lab lifecycle by mounting `/var/run/docker.sock` into a
 container.** It silently breaks the property under test. With the socket

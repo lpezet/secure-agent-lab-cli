@@ -21,7 +21,13 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Pinned to a major version rather than floating: the signing flags in
+      # .goreleaser.yaml and the verify flags in install.sh are v3's, and v2
+      # can neither produce nor read the bundle they use. A silent jump across
+      # that line breaks releases at the one moment nobody is watching.
       - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: "v3.1.3"
 
       - uses: goreleaser/goreleaser-action@v6
         with:

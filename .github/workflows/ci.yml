@@ -26,6 +26,24 @@ jobs:
       # nothing else breaks at the moment it is violated.
       - run: go test ./...
 
+      # The install script's refusals: a tampered archive, a release with no
+      # checksums, a signature that does not verify. curl and cosign are fakes
+      # on PATH, so this needs no network and no release to exist.
+      - run: make test-install
+
+      # The same tier across distros, which is where the assumptions under that
+      # logic vary: busybox sha256sum and tar have no long options, and a
+      # non-root user may not have ~/.local/bin yet. No Docker socket is
+      # mounted and nothing starts a lab — it runs a shell script against a
+      # filesystem.
+      - run: make test-install-containers
+
+      # The compose behaviours sal's code assumes — profile selection, the port
+      # read-back, what a stopped service answers. Written from documentation
+      # before there was a daemon to check them against, and one of them was
+      # wrong.
+      - run: make test-compose
+
       - name: gofmt
         run: |
           unformatted=$(gofmt -l .)
