@@ -169,6 +169,7 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 	if err := deployment.Save(labDir, &deployment.Record{
 		StackTag:    stackTag,
 		StackCommit: commit,
+		ProjectDir:  projectDir,
 		Installed:   []deployment.Entry{},
 		BaseAddons:  installed,
 	}); err != nil {
@@ -509,6 +510,13 @@ func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
 	if err != nil {
 		return err
 	}
+
+	// Set from what was OBSERVED — l.ProjectDir is the directory whose pointer
+	// actually named this lab — rather than carried forward from the old
+	// record, which is only a claim made whenever the lab was created. It also
+	// means a lab from before the field existed gains one here, which is what
+	// the "unrecorded" line in `sal labs list` tells the operator to do.
+	newRec.ProjectDir = l.ProjectDir
 
 	// Re-render last: if anything above failed, the compose file still
 	// describes the release the files on disk came from.

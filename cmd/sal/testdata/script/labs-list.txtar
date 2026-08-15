@@ -1,0 +1,188 @@
+# `sal labs list` answers "what is currently running with my credentials
+# attached?", which is why it is a control and not a listing.
+#
+# Docker is faked with a /bin/sh script placed first on PATH. That is not a
+# shortcut around the real thing — it is the only way to make the two answers
+# that matter deterministic: a lab that is RUNNING, and a compose project
+# running out of the labs directory that no deployment there accounts for.
+# Neither can be produced by starting containers in a test, and both are the
+# whole point of the command.
+
+[windows] skip 'the fake docker is a /bin/sh script'
+
+env PATH=$WORK/bin:$PATH
+chmod 0755 bin/docker
+env FAKE_DOCKER_LS=$WORK/nothing.json
+
+# An empty machine says so rather than printing an empty table. This runs
+# first, and the labs below are moved into place afterwards, because a txtar
+# lays every file down before the first command.
+exec sal labs list
+! stdout .
+stderr 'no labs on this machine'
+stderr 'sal init'
+
+# Four labs that cannot be produced by running sal: a record from a generation
+# this build refuses, one predating the project_dir field, one whose project
+# has been deleted, and a directory that is not a deployment at all.
+mv seed/broken-lab $WORK/.config/secure-agent-lab/labs/broken-lab
+mv seed/old-lab $WORK/.config/secure-agent-lab/labs/old-lab
+mv seed/demo-lab $WORK/.config/secure-agent-lab/labs/demo-lab
+mv seed/junk $WORK/.config/secure-agent-lab/labs/junk
+
+# And a real one, created the way an operator creates one.
+cd project
+exec sal init --stack-dir $FIXTURES/local-stack
+cd $WORK
+
+exec sal labs list
+
+# Every lab is reported, running or not. The healthy one names its project,
+# which is the whole reason `sal init` records it: the lab name derives from the
+# project's path, but a hash cannot be inverted, so without the record an
+# inventory cannot say what any lab is FOR.
+#
+# Anchored at both ends on purpose — every way this line can be wrong appends a
+# marker after the path, so a loose match would pass on all of them.
+stdout '^project-[0-9a-f]{8}$'
+stdout 'project\s+.*[/\\]project$'
+stdout 'stack\s+v1\.9\.0'
+
+# A lab with a provider installed says which — from the deployment's own
+# record, so this command needs neither the network nor a manifest.
+stdout '^demo-lab$'
+stdout 'providers\s+acme'
+
+# One with nothing installed says that too, since "no providers" and "not
+# reported" would otherwise look the same.
+stdout 'providers\s+none — no credential path installed'
+
+# THE finding. A lab whose project directory is gone is the forgotten lab this
+# command exists to surface: nothing is using it, and it will not show up in
+# any project's `sal down`.
+stdout 'gone; nothing is using this lab'
+
+# A directory under labs/ that is not a deployment is shown rather than
+# filtered out — half-created and half-deleted are both worth seeing.
+stdout '^junk$'
+stdout 'not a deployment'
+
+# So is a record this build refuses to read. An inventory that skipped it would
+# report a smaller machine than the operator has.
+stdout '^broken-lab$'
+stdout 'generation 99'
+
+# A lab from before sal recorded the project says so, and says what fixes it.
+stdout '^old-lab$'
+stdout 'unrecorded'
+stdout 'sal upgrade'
+
+# 5 labs and no docker answer yet — see below.
+stderr '5 labs on this machine'
+
+# A project that exists but no longer points back is the same finding from the
+# other side: `sal init` here would create a second lab and this one would keep
+# running.
+rm project/.sal/lab.json
+exec sal labs list
+stdout 'no \.sal[/\\]lab\.json; nothing is using this lab'
+
+# And a project that has moved on to a different lab.
+cp moved-pointer.json project/.sal/lab.json
+exec sal labs list
+stdout 'that project now uses lab "somewhere-else"'
+
+# ---------------------------------------------------------------- docker off
+#
+# A machine whose daemon is unreachable still gets the inventory: which labs
+# EXIST is a fact about the filesystem. What it must NOT get is silence that
+# reads as "nothing is running".
+env FAKE_DOCKER_BROKEN=1
+exec sal labs list
+stdout 'status\s+unknown'
+stderr 'Docker could not be asked which are running'
+! stderr '0 running'
+env FAKE_DOCKER_BROKEN=0
+
+# ----------------------------------------------------------------- docker on
+#
+# Nothing running is stated as a count, and the standing warning about mounted
+# credentials stays quiet — it is only true of a lab that is up.
+exec sal labs list
+stdout 'status\s+not started'
+stderr '5 labs on this machine, 0 running\.'
+! stderr 'mounts the whole secrets directory'
+
+# One lab up. Docker's own word for the status is passed through rather than
+# reinterpreted.
+env FAKE_DOCKER_LS=$WORK/running.json
+exec sal labs list
+stdout 'status\s+running\(6\)'
+stderr '5 labs on this machine, 1 running\.'
+
+# Stated only when something is running, and stated precisely: the broker sees
+# every credential on the machine, the agent sees only the routes its installed
+# providers expose.
+stderr 'mounts the whole secrets directory into its broker'
+stderr 'only what its installed providers expose'
+
+# THE loudest finding. Containers are up out of the labs directory, and the
+# deployment describing what they do is gone — so nothing on disk says which
+# providers that broker serves, and there is no lab for sal to stop.
+env FAKE_DOCKER_LS=$WORK/orphan.json
+exec sal labs list
+stderr 'warning: 1 compose project running from .* with no deployment there'
+stderr 'ghost-lab'
+stderr 'docker compose -p <name> down'
+
+# Scoped to the labs directory. Every other compose project on the machine is
+# somebody else's business, and reporting them would make the warning noise.
+! stderr 'someone-elses-app'
+
+-- bin/docker --
+#!/bin/sh
+# Stands in for `docker compose` in labs-list.txtar. Two subcommands, which is
+# all `sal labs list` uses: `version` for the availability check and `ls` for
+# the state of every project.
+#
+# The sed is because a txtar file section cannot hold $WORK, and the ConfigFiles
+# paths have to sit under the real labs directory for the orphan check — which
+# is a check about WHERE a project's compose file lives — to mean anything.
+[ "$1" = compose ] || exit 1
+case "$2" in
+	version) exit ${FAKE_DOCKER_BROKEN:-0} ;;
+	ls) sed "s|@LABS@|$WORK/.config/secure-agent-lab/labs|g" "$FAKE_DOCKER_LS" ;;
+	*) exit 1 ;;
+esac
+-- nothing.json --
+[]
+-- running.json --
+[{"Name": "demo-lab", "Status": "running(6)", "ConfigFiles": "@LABS@/demo-lab/compose.yaml"}]
+-- orphan.json --
+[
+  {"Name": "demo-lab", "Status": "running(6)", "ConfigFiles": "@LABS@/demo-lab/compose.yaml"},
+  {"Name": "ghost-lab", "Status": "running(6)", "ConfigFiles": "@LABS@/ghost-lab/compose.yaml"},
+  {"Name": "someone-elses-app", "Status": "running(3)", "ConfigFiles": "/srv/app/compose.yaml"}
+]
+-- moved-pointer.json --
+{"schema_version": 1, "name": "somewhere-else", "stack_tag": "v1.9.0"}
+-- project/.keep --
+-- seed/junk/.keep --
+-- seed/broken-lab/compose.yaml --
+name: broken-lab
+-- seed/broken-lab/.sal/installed.json --
+{"schema_version": 99, "stack_tag": "v1.9.0", "installed": []}
+-- seed/old-lab/compose.yaml --
+name: old-lab
+-- seed/old-lab/.sal/installed.json --
+{"schema_version": 1, "stack_tag": "v1.8.0", "installed": []}
+-- seed/demo-lab/compose.yaml --
+name: demo-lab
+-- seed/demo-lab/.sal/installed.json --
+{
+  "schema_version": 1,
+  "stack_tag": "v1.9.0",
+  "stack_commit": "0123456789abcdef0123456789abcdef01234567",
+  "project_dir": "/nonexistent/deleted-project",
+  "installed": [{"name": "acme", "slot": 10, "schema_version": 1, "files": ["proxy/010_acme.py"]}]
+}

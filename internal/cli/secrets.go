@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/lpezet/secure-agent-lab-cli/internal/config"
 	"github.com/lpezet/secure-agent-lab-cli/internal/deployment"
+	"github.com/lpezet/secure-agent-lab-cli/internal/lab"
 	"github.com/lpezet/secure-agent-lab-cli/internal/manifest"
 	"github.com/lpezet/secure-agent-lab-cli/internal/prompt"
 	"github.com/lpezet/secure-agent-lab-cli/internal/secrets"
@@ -413,74 +413,57 @@ func describeState(st secrets.State, s manifest.Secret) string {
 // labsUsing returns the labs on this machine that installed a provider, so an
 // overwrite can say how far it reaches.
 func labsUsing(provider string) ([]string, error) {
-	root, err := config.LabsDir()
-	if err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(root)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
 	var using []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		rec, err := deployment.Load(filepath.Join(root, e.Name()))
-		if err != nil {
-			// A lab whose record cannot be read is not a reason to refuse to
-			// store a credential; it only makes the count a floor.
-			continue
-		}
+	err := eachLab(func(l *lab.Lab, rec *deployment.Record) {
 		for _, name := range rec.Names() {
 			if name == provider {
-				using = append(using, e.Name())
-				break
+				using = append(using, l.Name)
+				return
 			}
 		}
-	}
+	})
 	sort.Strings(using)
-	return using, nil
+	return using, err
 }
 
 // installedEverywhere is the union of what every lab on this machine has
 // installed.
 func installedEverywhere() ([]string, error) {
-	root, err := config.LabsDir()
-	if err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(root)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
 	seen := map[string]bool{}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		rec, err := deployment.Load(filepath.Join(root, e.Name()))
-		if err != nil {
-			continue
-		}
+	err := eachLab(func(_ *lab.Lab, rec *deployment.Record) {
 		for _, name := range rec.Names() {
 			seen[name] = true
 		}
-	}
+	})
 	names := make([]string, 0, len(seen))
 	for name := range seen {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return names, nil
+	return names, err
+}
+
+// eachLab visits every deployment whose record can be read.
+//
+// A lab whose record cannot be read is SKIPPED, and that is only defensible
+// because of what the two callers do with the answer: one counts how many labs
+// share a credential, the other collects which providers to list. Both degrade
+// to an understatement, which is survivable. `sal labs list` deliberately does
+// not use this — an unreadable record is exactly what an inventory must report
+// rather than skip.
+func eachLab(visit func(*lab.Lab, *deployment.Record)) error {
+	labs, err := lab.All()
+	if err != nil {
+		return err
+	}
+	for _, l := range labs {
+		rec, err := deployment.Load(l.Dir)
+		if err != nil {
+			continue
+		}
+		visit(l, rec)
+	}
+	return nil
 }
 
 func sharedBy(labs []string) string {
