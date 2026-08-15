@@ -129,6 +129,18 @@ FAKE
 
 chmod 0755 "$bin"/* "$cosignbin"/*
 
+# HOME points at the scratch directory, for the same reason the txtar suite
+# does it: install.sh's default install location is under $HOME, so a run that
+# reached the real one could overwrite the operator's own sal. Every case below
+# also passes SAL_INSTALL_DIR explicitly, and this is the belt to that braces —
+# the harness runs on the host, so "contained" has to be true rather than
+# intended.
+#
+# The interpreter is named by absolute path rather than found on the pinned
+# PATH: on an Alpine-based image bash lives in /usr/local/bin, and a harness
+# that could not run there would skip the only environment with busybox
+# coreutils — which is the environment this whole tier exists to reach.
+#
 # A PATH the harness controls completely, rather than the developer's.
 #
 # Not tidiness: whether install.sh takes the cosign branch is decided by
@@ -146,12 +158,13 @@ run() {
 	shift
 	[ -n "${WITH_COSIGN:-}" ] && path="$cosignbin:$path"
 	SAL_INSTALL_DIR="$dir" \
+		HOME="$work/home" \
 		FAKE_RELEASE_DIR="$FAKE_RELEASE_DIR" \
 		FAKE_LATEST="${FAKE_LATEST:-}" \
 		FAKE_COSIGN_STATUS="${FAKE_COSIGN_STATUS:-0}" \
 		FAKE_UNAME_S="${FAKE_UNAME_S:-}" FAKE_UNAME_M="${FAKE_UNAME_M:-}" \
 		PATH="$path" \
-		bash "$script" "$@" >"$work/out" 2>"$work/err"
+		"${BASH:-bash}" "$script" "$@" >"$work/out" 2>"$work/err"
 }
 
 said() { grep -q -- "$1" "$work/out" "$work/err"; }
@@ -202,6 +215,24 @@ FAKE_RELEASE_DIR="$nosums" run "$target" "$version"
 status=$?
 check "refuses a release with no checksums.txt" "$([ "$status" -ne 0 ] && echo 0 || echo 1)"
 check "says it is refusing to install unverified" "$(said 'refusing to install unverified' && echo 0 || echo 1)"
+
+# --------------------------------- a checksums file that does not cover this
+#
+# The file lists every platform's archive; the one this machine needs may
+# simply not be in it. That is a refusal in its own right rather than something
+# inferred from a checker's exit status — and the GNU flag that used to paper
+# over it (--ignore-missing) does not exist in busybox, which is what Alpine
+# has.
+othersonly="$work/othersonly-release"
+cp -r "$release" "$othersonly"
+( cd "$othersonly" && printf '%s  %s\n' "$(sha256_of "$archive")" "sal_1.2.3_darwin_arm64.tar.gz" > checksums.txt )
+target="$work/othersonly"
+FAKE_RELEASE_DIR="$othersonly" run "$target" "$version"
+status=$?
+check "refuses a checksums file with no entry for this archive" "$([ "$status" -ne 0 ] && echo 0 || echo 1)"
+check "says the entry is missing rather than that the sum did not match" \
+	"$(said 'no entry for' && echo 0 || echo 1)"
+check "installs nothing when its archive is not covered" "$([ ! -e "$target/sal" ] && echo 0 || echo 1)"
 
 # ------------------------------------------------------- a missing asset
 target="$work/missing"
@@ -260,6 +291,10 @@ check "points Windows at WSL rather than just refusing" "$(said 'WSL' && echo 0 
 target="$work/notonpath"
 run "$target" "$version"
 check "says when the install directory is not on PATH" "$(said 'not on your PATH' && echo 0 || echo 1)"
+
+# The harness runs on the host, so this is asserted rather than assumed.
+check "never wrote outside its own scratch directory" \
+	"$([ ! -e "$work/home/.local/bin/sal" ] && echo 0 || echo 1)"
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

@@ -895,6 +895,26 @@ non-root, catches what actually breaks — arch detection, busybox `tar`,
 `sha256sum` vs `shasum`, which PATH directory is writable — and needs no Docker
 inside the container.
 
+Both halves of that exist. `tests/install/run.sh` is the LOGIC — the refusals,
+the resolution, what it says — and runs anywhere, with `curl` and `cosign`
+faked on `PATH` and `HOME` pointed at scratch so a run cannot reach the
+operator's own `sal`. `tests/install/containers.sh` runs that same file inside
+`debian:stable-slim`, `ubuntu:24.04` and `bash:5` (Alpine-based, so busybox
+`tar` and busybox `sha256sum`), as root and as an ordinary user, with
+`--network none` and the checkout mounted read-only.
+
+It found what it was built to find: `--ignore-missing` and `--status` are GNU
+spellings that busybox does not have, and `-s` is a *shasum* spelling that GNU
+`sha256sum` does not have. So `install.sh` now uses `-c` alone, throws the
+output away rather than asking for quiet, and picks the checksum line for its
+own archive with `awk` instead of passing `--ignore-missing`. That last change
+also turns "the checksums file has no line for this archive" into an explicit
+refusal rather than something inferred from a checker's exit status.
+
+Note what the container tier does NOT do: no Docker socket is mounted and
+nothing starts a lab. It runs a shell script against a filesystem, which is why
+a container is right here and wrong for the lifecycle — see the warning below.
+
 ⚠️ **Do not test the lab lifecycle by mounting `/var/run/docker.sock` into a
 container.** It silently breaks the property under test. With the socket
 mounted, compose drives the *host* daemon, so observer publishes on the host's

@@ -31,6 +31,13 @@ jobs:
       # on PATH, so this needs no network and no release to exist.
       - run: make test-install
 
+      # The same tier across distros, which is where the assumptions under that
+      # logic vary: busybox sha256sum and tar have no long options, and a
+      # non-root user may not have ~/.local/bin yet. No Docker socket is
+      # mounted and nothing starts a lab — it runs a shell script against a
+      # filesystem.
+      - run: make test-install-containers
+
       - name: gofmt
         run: |
           unformatted=$(gofmt -l .)

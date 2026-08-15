@@ -7,7 +7,7 @@ COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null)
 LDFLAGS := -X $(PKG)/internal/version.version=$(VERSION) \
            -X $(PKG)/internal/version.commit=$(COMMIT)
 
-.PHONY: all build test test-install vet fmt fmt-check check clean snapshot
+.PHONY: all build test test-install test-install-containers vet fmt fmt-check check clean snapshot
 
 all: check build
 
@@ -38,6 +38,13 @@ fmt-check:
 # being an acceptable install path, so they are tested rather than assumed.
 test-install:
 	bash tests/install/run.sh
+
+# The same tier inside debian, ubuntu and an Alpine-based image, as root and as
+# an ordinary user. Separate from `check` because it needs Docker and exits 2
+# without it — but it is where the distro assumptions are actually tested:
+# busybox has no long options, and GNU sha256sum has no -s.
+test-install-containers:
+	bash tests/install/containers.sh
 
 # What CI runs, and it must stay that. Three parts of it are not optional
 # extras: internal/invariants is the guard on this repo having no per-provider
