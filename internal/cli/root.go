@@ -166,11 +166,18 @@ func warnIfStackTooOld(cmd *cobra.Command, tag string) {
 		return
 	}
 	if have.Less(min) {
+		// Says what is actually wrong with being below the line, and the
+		// answer changed when the line moved: it used to be a format problem
+		// — no schema_version on manifests before 1.9.0 — and it is now a
+		// credential-exposure one as well.
 		fmt.Fprintf(cmd.ErrOrStderr(),
 			"\nwarning: this lab is pinned to %s, below the %s that sal expects.\n"+
-				"         Below %s a bank manifest carries no schema_version, so sal cannot tell\n"+
-				"         whether it understands one it is reading. Run `sal upgrade` when you can.\n",
-			have.Tag(), min.Tag(), min.Tag())
+				"         Up to 1.9.1 the proxy compared the request's host without normalising it,\n"+
+				"         so http://BROKER:8080/<route> reached the broker's raw credential routes —\n"+
+				"         the ones cred-gateway does not expose. Below 1.9.0, bank manifests also\n"+
+				"         carry no schema_version, so sal cannot tell whether it understands one it\n"+
+				"         is reading. Run `sal upgrade` when you can.\n",
+			have.Tag(), min.Tag())
 	}
 }
 

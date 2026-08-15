@@ -8,7 +8,7 @@ cd project
 
 exec sal version
 stdout '^sal\s+'
-stdout '^stack\s+v1\.9\.0 \(3ef8552aa\)'
+stdout '^stack\s+v1\.9\.2 \(3ef8552aa\)'
 stdout '^project\s+'
 stdout '^lab\s+.*[/\\]labs[/\\]demo-lab'
 ! stderr 'warning'
@@ -17,13 +17,13 @@ stdout '^lab\s+.*[/\\]labs[/\\]demo-lab'
 # the project rather than only at its root.
 cd sub/deeper
 exec sal version
-stdout '^stack\s+v1\.9\.0'
+stdout '^stack\s+v1\.9\.2'
 
 # A pointer naming a lab that does not exist is a real state — a clone of a
 # repo whose lab was never created here — and it says so rather than crashing.
 cd $WORK/orphan
 exec sal version
-stdout '^stack\s+v1\.9\.0'
+stdout '^stack\s+v1\.9\.2'
 stderr 'names lab "missing-lab", but no deployment exists there'
 stderr 'sal init'
 
@@ -31,14 +31,14 @@ stderr 'sal init'
 # because it says what was actually built. The disagreement is reported.
 cd $WORK/disagreeing
 exec sal version
-stdout '^stack\s+v1\.9\.0'
-stderr 'project asks for stack v2\.0\.0 but its lab was built from v1\.9\.0'
+stdout '^stack\s+v1\.9\.2'
+stderr 'project asks for stack v2\.0\.0 but its lab was built from v1\.9\.2'
 
 -- project/.sal/lab.json --
-{"schema_version": 1, "name": "demo-lab", "stack_tag": "v1.9.0"}
+{"schema_version": 1, "name": "demo-lab", "stack_tag": "v1.9.2"}
 -- project/sub/deeper/.keep --
 -- orphan/.sal/lab.json --
-{"schema_version": 1, "name": "missing-lab", "stack_tag": "v1.9.0"}
+{"schema_version": 1, "name": "missing-lab", "stack_tag": "v1.9.2"}
 -- disagreeing/.sal/lab.json --
 {"schema_version": 1, "name": "demo-lab", "stack_tag": "v2.0.0"}
 -- .config/secure-agent-lab/labs/demo-lab/compose.yaml --
@@ -46,7 +46,7 @@ name: demo-lab
 -- .config/secure-agent-lab/labs/demo-lab/.sal/installed.json --
 {
   "schema_version": 1,
-  "stack_tag": "v1.9.0",
+  "stack_tag": "v1.9.2",
   "stack_commit": "3ef8552aa",
   "installed": []
 }

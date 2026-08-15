@@ -13,7 +13,8 @@ stdout '^stack\s+v1\.5\.0'
 
 # The warning goes to stderr, so it cannot corrupt anything parsing stdout.
 stderr 'warning: this lab is pinned to v1\.5\.0'
-stderr 'below the v1\.9\.0 that sal expects'
+stderr 'below the v1\.9\.2 that sal expects'
+stderr 'reached the broker'
 stderr 'schema_version'
 
 -- project/.sal/lab.json --

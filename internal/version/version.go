@@ -20,11 +20,18 @@ var commit = ""
 // MinimumStack is the oldest stack this build will manage without complaint.
 //
 // This is the WARN-level check of the three, and the only one owned by this
-// repo rather than by a manifest. It sits at 1.9.0 because that is the release
-// that gave bank manifests a schema_version: below it, this CLI cannot tell
-// whether it understands a manifest it is reading, which is the one thing it
-// must never guess at.
-const MinimumStack = "1.9.0"
+// repo rather than by a manifest. It sat at 1.9.0 for a format reason: that is
+// the release which gave bank manifests a schema_version, and below it this
+// CLI cannot tell whether it understands a manifest it is reading.
+//
+// It sits at 1.9.2 for a different and stronger one. Every release up to and
+// including 1.9.1 compares the request's host against the internal-host set
+// without normalising it, so `http://BROKER:8080/<any route>` through the
+// proxy reached the broker — the raw credential routes cred-gateway
+// deliberately does not expose. The proxy is on both networks, so on that path
+// the addon is the only control and Docker's isolation does not back it up.
+// A lab pinned below this should hear about it every time sal runs.
+const MinimumStack = "1.9.2"
 
 // DefaultStack is what `sal init` pins to when nobody says otherwise.
 //
@@ -33,7 +40,11 @@ const MinimumStack = "1.9.0"
 // is, because "newest" is a moving target and a lab's boundary should not
 // depend on when it happened to be created. --stack overrides it, and the
 // value is printed at init so the choice is never silent.
-const DefaultStack = "v1.9.0"
+//
+// v1.9.2 rather than v1.9.0 because of the same bypass MinimumStack names:
+// pinning a NEW lab to a release with a known credential-exposure bug is the
+// worst version of that default being stale.
+const DefaultStack = "v1.9.2"
 
 // CLI returns this binary's own version. It is deliberately separate from the
 // stack tag: `sal --version` prints both, because "I am four versions behind"

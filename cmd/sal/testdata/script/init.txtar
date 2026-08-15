@@ -10,7 +10,7 @@ cd project
 exec sal init --stack-dir $FIXTURES/local-stack
 stdout '^lab\s+project-[0-9a-f]{8}$'
 stdout '^at\s+.*[/\\]labs[/\\]project-[0-9a-f]{8}$'
-stdout '^stack\s+v1\.9\.0'
+stdout '^stack\s+v1\.9\.2'
 stdout '^project\s+'
 
 # The stack's own proxy addons are installed, not just bank entries. Without
@@ -20,7 +20,7 @@ stdout '^addon\s+000_policy\.py$'
 stdout '^addon\s+001_allowlist\.py$'
 
 # The default release is stated, never silent.
-stderr 'pinning to stack v1\.9\.0'
+stderr 'pinning to stack v1\.9\.2'
 stderr '--stack'
 
 # Reading a local checkout means the release went unverified, so no commit is
@@ -30,7 +30,7 @@ stderr 'sal providers add'
 
 # The project keeps only a pointer — no absolute paths, so it can be committed.
 exists .sal/lab.json
-grep '"stack_tag": "v1.9.0"' .sal/lab.json
+grep '"stack_tag": "v1.9.2"' .sal/lab.json
 grep '"name": "project-' .sal/lab.json
 ! grep '/' .sal/lab.json
 
@@ -39,7 +39,7 @@ grep '"name": "project-' .sal/lab.json
 ! exists .sal/installed.json
 
 exec sal version
-stdout '^stack\s+v1\.9\.0$'
+stdout '^stack\s+v1\.9\.2$'
 
 # A virgin lab has no PROVIDERS, even though it has addons — the two are
 # recorded separately, because a stack addon is not a bank entry and
