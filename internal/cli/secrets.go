@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -38,7 +39,10 @@ func newSecretsCmd() *cobra.Command {
 }
 
 func newSecretsSetCmd() *cobra.Command {
-	var fromFile, stack string
+	var (
+		fromFile, stack string
+		fromStdin       bool
+	)
 	cmd := &cobra.Command{
 		Use:   "set PROVIDER [FILE]",
 		Short: "Store a credential, read from the terminal with echo off",
@@ -50,13 +54,20 @@ func newSecretsSetCmd() *cobra.Command {
 			"with. That variable is what the BROKER reads, and its value is a path inside\n" +
 			"the container, so it names neither the credential nor anywhere you can put\n" +
 			"one. Naming one gets you told which file it means.\n\n" +
-			"The value is read from the terminal with echo off, and a non-terminal stdin is\n" +
-			"refused rather than read. There is no flag to pass the value, and there will\n" +
-			"not be one: an argv is in shell history, in ps, and in any process listing the\n" +
-			"agent can run — and a pipe is an argv one process upstream.\n\n" +
-			"--from-file is not an exception to that. A PATH in an argv reveals nothing; a\n" +
-			"VALUE in an argv is the whole problem. Typing a path at the prompt works too,\n" +
-			"and is confirmed before anything is copied.\n\n" +
+			"The value is read from the terminal with echo off. There is no flag to pass the\n" +
+			"value, and there will not be one: an argv is in shell history, in ps, and in\n" +
+			"any process listing the agent can run.\n\n" +
+			"--from-file and --from-stdin are not exceptions to that. Three exposures, not\n" +
+			"one:\n" +
+			"  a PATH in an argv reveals nothing,\n" +
+			"  a VALUE in an argv is the whole problem,\n" +
+			"  and stdin is not an argv at all.\n" +
+			"Typing a path at the prompt works too, and is confirmed before anything is\n" +
+			"copied.\n\n" +
+			"A pipe with NEITHER flag is still refused. --from-stdin is for a value with no\n" +
+			"file to point at — `op read ... | sal secrets set ... --from-stdin` — and being\n" +
+			"explicit is what keeps a lost terminal, in cron or CI, an error rather than an\n" +
+			"input source.\n\n" +
 			"Credentials are shared by every lab on this machine, so overwriting one\n" +
 			"rotates it for all of them. That is stated and confirmed, never assumed.",
 		Args: cobra.RangeArgs(1, 2),
@@ -65,10 +76,11 @@ func newSecretsSetCmd() *cobra.Command {
 			if len(args) > 1 {
 				selector = args[1]
 			}
-			return runSecretsSet(cmd, args[0], selector, fromFile, stack)
+			return runSecretsSet(cmd, args[0], selector, fromFile, stack, fromStdin)
 		},
 	}
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "read the credential from a file instead of prompting")
+	cmd.Flags().BoolVar(&fromStdin, "from-stdin", false, "read the credential from stdin, for a secret manager with no file to point at")
 	cmd.Flags().StringVar(&stack, "stack", "", "read the manifest at this release instead of the one this lab is pinned to")
 	return cmd
 }
@@ -97,8 +109,16 @@ func newSecretsListCmd() *cobra.Command {
 	return cmd
 }
 
-func runSecretsSet(cmd *cobra.Command, provider, selector, fromFile, stack string) error {
+func runSecretsSet(cmd *cobra.Command, provider, selector, fromFile, stack string, fromStdin bool) error {
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+
+	// Naming two sources is a mistake, not a precedence question. Picking one
+	// would mean the operator's other source was silently ignored — and which
+	// bytes ended up in the credential file is the thing this command cannot
+	// afford to leave to a rule nobody read.
+	if fromFile != "" && fromStdin {
+		return errors.New("--from-file and --from-stdin name two sources for one credential; pass one of them")
+	}
 
 	sc, err := resolveStack(cmd, stack)
 	if err != nil {
@@ -128,9 +148,12 @@ func runSecretsSet(cmd *cobra.Command, provider, selector, fromFile, stack strin
 	if err != nil {
 		return err
 	}
-	if fromFile != "" && len(chosen) != 1 {
-		return fmt.Errorf("--from-file sets one credential, but %s declares %d; name which one:\n%s",
-			m.Name, len(chosen), secretMenu(m))
+	// A non-interactive source sets exactly one credential. Without this the
+	// value would be written into every credential the provider declares —
+	// one source, several destinations, and no prompt in between to notice.
+	if source := nonInteractiveSource(fromFile, fromStdin); source != "" && len(chosen) != 1 {
+		return fmt.Errorf("%s sets one credential, but %s declares %d; name which one:\n%s",
+			source, m.Name, len(chosen), secretMenu(m))
 	}
 
 	dir, err := config.SecretsDir()
@@ -145,7 +168,7 @@ func runSecretsSet(cmd *cobra.Command, provider, selector, fromFile, stack strin
 	}
 
 	for _, s := range chosen {
-		value, err := readSecretValue(cmd, s, fromFile)
+		value, err := readSecretValue(cmd, s, fromFile, fromStdin)
 		if err != nil {
 			return err
 		}
@@ -181,10 +204,30 @@ func runSecretsSet(cmd *cobra.Command, provider, selector, fromFile, stack strin
 	return nil
 }
 
-// readSecretValue gets one credential's bytes, from --from-file or the
-// terminal.
-func readSecretValue(cmd *cobra.Command, s manifest.Secret, fromFile string) ([]byte, error) {
+// nonInteractiveSource names the flag in play, or "" when the operator is
+// being prompted. Both flags carry the same rule, so both have to answer to
+// the same check rather than each remembering it.
+func nonInteractiveSource(fromFile string, fromStdin bool) string {
+	switch {
+	case fromFile != "":
+		return "--from-file"
+	case fromStdin:
+		return "--from-stdin"
+	}
+	return ""
+}
+
+// readSecretValue gets one credential's bytes, from a flag or the terminal.
+func readSecretValue(cmd *cobra.Command, s manifest.Secret, fromFile string, fromStdin bool) ([]byte, error) {
 	errOut := cmd.ErrOrStderr()
+
+	// Stdin is not an argv, which is the whole distinction: a secret manager
+	// writes to a pipe and never to a command line. What this does NOT relax is
+	// the default — a pipe with no flag is still refused in ReadSecret, so a
+	// lost terminal stays an error instead of quietly becoming an input.
+	if fromStdin {
+		return prompt.ReadPiped(secrets.MaxFileSize)
+	}
 
 	if fromFile != "" {
 		ref := secrets.ResolveFile([]byte(fromFile))
