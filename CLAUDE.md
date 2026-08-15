@@ -312,7 +312,9 @@ extraction. Modes come from `sal`, not from the archive.
 
 **Never take a credential value as an argv.** `sal secrets set` reads from the
 TTY with echo off. An argv is in shell history, in `ps`, and in any process
-listing the agent can run. Same rule for anything that shells out.
+listing the agent can run. Same rule for anything that shells out. A *path* is
+not a value and stdin is not an argv — see "A pipe is refused by DEFAULT"
+below for where that line falls.
 
 **Mount `secrets/`, never its parent.** The consolidated location is
 `~/.config/secure-agent-lab/secrets/`, replacing the stack's current
@@ -369,7 +371,27 @@ that asked for a key. Without the check, `sal` writes thirty-four bytes of path
 into the credential file and reports success. `--from-file` covers the same
 ground non-interactively, and is not an exception to the never-in-argv rule — a
 *path* in an argv reveals nothing, while a *value* in an argv is the whole
-problem. A pipe is still refused, because a pipe is an argv one process upstream.
+problem.
+
+**A pipe is refused by DEFAULT and available behind `--from-stdin`.** This
+document used to say a pipe is refused outright, "because a pipe is an argv one
+process upstream". True of `echo $TOKEN | sal …` and false of every other
+shape — `op read …`, `vault kv get`, `gpg -d` — and `sal` cannot tell them
+apart, so it took the strict default. Right instinct, wrong width: it left no
+way to take a credential from a secret manager without `op read … > /tmp/tok`
+first, which puts plaintext on disk and depends on someone remembering the
+`rm`. That is worse than what the refusal was protecting against.
+
+The flag is what makes the difference, and not because it is safer —
+`echo $TOKEN | sal … --from-stdin` is exactly as exposed as without it. It is
+that **the absence of a terminal stays an error**. Cron, CI, a `make` recipe, a
+stray `< /dev/null`: on a bare pipe every one of those silently becomes an input
+source, and `sal secrets set <provider>` with no selector walks *several*
+credentials, so the first would eat the stream and the rest read EOF. So
+`--from-stdin` carries the same rule `--from-file` does — it sets exactly one
+credential, named — and naming both flags is refused rather than resolved by
+precedence. A value flag (`--value`, `--from-literal`, `--token`) remains
+forbidden: stdin is not argv, and the two are different exposures.
 
 **A credential is named by its `file`, exactly — never by its `env`.** The env
 var is what the *broker* reads and its value is a path *inside the container*,
@@ -417,6 +439,7 @@ sal providers create telegram --template rest-bearer
 sal secrets set anthropic
 sal secrets set anthropic anthropic-auth.token
 sal secrets set github --from-file ~/Downloads/app.private-key.pem
+op read op://vault/anthropic/token | sal secrets set anthropic anthropic-auth.token --from-stdin
 sal secrets list
 sal features list
 sal features enable observer

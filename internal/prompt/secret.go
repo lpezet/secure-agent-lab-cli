@@ -19,12 +19,52 @@ import (
 
 // ErrNotATerminal is returned when stdin is not a terminal.
 //
-// This is a refusal, not a fallback. Accepting a piped value would put the
-// credential back in an argv one process upstream — `echo $TOKEN | sal ...` is
-// the exact shape the no-argv rule exists to prevent, and it would look like it
-// worked.
+// This is a refusal, not a fallback. A pipe nobody asked for is a pipe nobody
+// checked: `echo $TOKEN | sal ...` puts the credential in an argv one process
+// upstream, and reading it would look like it worked. It is also how a lost
+// terminal — a cron job, a CI runner, a stray `< /dev/null` — would otherwise
+// stop being an error and start being an input.
+//
+// It is the DEFAULT that is refused, not the channel. ReadPiped below is the
+// same read behind a flag, for the case where the value comes from a secret
+// manager and there is no file to point at.
 var ErrNotATerminal = errors.New(
-	"refusing to read a credential from a pipe: stdin is not a terminal, and a piped value is an argv one process away")
+	"refusing to read a credential from a pipe: stdin is not a terminal, and a piped value may be an argv one process away; " +
+		"pass --from-stdin if you meant to pipe one in")
+
+// ErrIsATerminal is returned when a piped read was asked for and stdin is a
+// terminal — so nothing was piped in, and reading would block on input the
+// operator has no reason to expect they owe.
+var ErrIsATerminal = errors.New(
+	"--from-stdin was given but stdin is a terminal, so there is nothing piped in; " +
+		"pipe the value in, or drop the flag to be prompted for it")
+
+// ReadPiped reads a credential from stdin, which the caller has explicitly
+// asked for.
+//
+// The pair with ReadSecret is deliberate, and they live together so the rule
+// is read in one place rather than re-derived: one refuses a pipe, the other
+// refuses a terminal, and neither ever guesses which it has been given.
+//
+// max bounds the read for the same reason ResolveFile bounds a file — the
+// thing on the other end of the pipe may not be a credential at all — and is
+// passed in rather than imported so this package stays about terminal I/O.
+func ReadPiped(max int64) ([]byte, error) {
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		return nil, ErrIsATerminal
+	}
+
+	// One byte past the limit, so exceeding it is detectable rather than
+	// silently truncating a credential to exactly max bytes.
+	value, err := io.ReadAll(io.LimitReader(os.Stdin, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(value)) > max {
+		return nil, fmt.Errorf("refusing a credential larger than %d bytes: whatever is on stdin is unlikely to be one", max)
+	}
+	return value, nil
+}
 
 // FileHook is given the first line of what was typed, before any more of it is
 // read, and answers whether that line named a file the operator meant to copy.
