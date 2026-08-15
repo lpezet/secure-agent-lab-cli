@@ -4,13 +4,11 @@ A CLI over [secure-agent-lab](https://github.com/lpezet/secure-agent-lab) — th
 Docker stack that runs autonomous agents without exposing long-lived
 credentials to the agent's process.
 
-> **Status: early, and pre-1.0 honestly.** `init`, `up`, `down`, `upgrade`,
-> `drift`, `open`, `features list|enable|disable`, `providers add|list`,
-> `secrets set|list`, `providers remove`, `labs list|down` and
-> `observer open|tail` work against a real stack. `providers create` is the one
-> stub left, and it exits non-zero —
-> deliberately, since a stub returning 0 would let a script believe a
-> credential was stored.
+> **Status: early, and pre-1.0 honestly.** Every command in the grammar now
+> works against a real stack — which is the first of the five things 1.0 means,
+> not 1.0 itself. The two on-disk formats are not declared stable yet, the
+> `lab_setup` question is unresolved, and the install script has never been run
+> against a published release.
 
 ## What it is for
 
@@ -57,7 +55,7 @@ sal drift                    report files that differ from the pinned release
 
 sal providers add NAME       install a bank entry
 sal providers remove NAME    delete exactly what the record says it installed
-sal providers create NAME    scaffold a new one
+sal providers create NAME    scaffold one the bank does not carry, in your own directory
 sal secrets set PROVIDER     store a credential, read from the terminal with echo off
 sal secrets list             what is stored, what is loose, what nothing claims
 sal features list            what is on, what is running, and where they disagree

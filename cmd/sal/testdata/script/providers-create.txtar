@@ -1,0 +1,113 @@
+# `sal providers create` — scaffold a provider the bank does not carry, then
+# install it from your own directory.
+#
+# The scaffold goes OUTSIDE the project, next to your labs and secrets. An
+# entry is code that runs behind the credential boundary once installed, so one
+# written into the workspace is one the agent could edit before you installed
+# it.
+
+cd project
+exec sal init --stack-dir $FIXTURES/local-stack
+
+# A name that is not a valid entry name is refused before anything is written —
+# it is about to become a directory name and a file name.
+! exec sal providers create 'Not A Name'
+stderr 'not a usable entry name'
+
+# The layout is the bank's own, so what you write here can be proposed to the
+# bank unchanged.
+exec sal providers create telegraph
+stdout 'write    provider\.json'
+stdout 'write    broker[/\\]telegraph\.js'
+stdout 'write    proxy[/\\]telegraph\.py'
+stdout 'write    cred-gateway[/\\]telegraph\.conf'
+
+exists $WORK/.config/secure-agent-lab/providers/telegraph/provider.json
+exists $WORK/.config/secure-agent-lab/providers/telegraph/broker/telegraph.js
+exists $WORK/.config/secure-agent-lab/providers/telegraph/proxy/telegraph.py
+exists $WORK/.config/secure-agent-lab/providers/telegraph/cred-gateway/telegraph.conf
+
+# Nothing lands in the project, which is the whole reason for the location.
+! exists $WORK/project/telegraph
+! exists $WORK/project/.sal/providers
+
+# The proxy addon carries NO slot number. The bank never bakes one in; the
+# installer assigns the lowest free one in the manifest's band.
+! exists $WORK/.config/secure-agent-lab/providers/telegraph/proxy/010_telegraph.py
+
+# It is a skeleton and says so, rather than reading like a working provider.
+grep 'TODO' $WORK/.config/secure-agent-lab/providers/telegraph/provider.json
+stderr 'A skeleton, not a provider'
+stderr 'PLAYBOOK\.md'
+
+# The placeholder host cannot resolve to anybody's API: .invalid is reserved
+# for exactly this.
+grep 'api\.telegraph\.invalid' $WORK/.config/secure-agent-lab/providers/telegraph/provider.json
+grep 'api\.telegraph\.invalid' $WORK/.config/secure-agent-lab/providers/telegraph/proxy/telegraph.py
+
+# The two-route shape is the design in miniature: the lab may ask for a scoped
+# credential and may never reach the route that mints one.
+grep '"/telegraph/token", "exposed": false' $WORK/.config/secure-agent-lab/providers/telegraph/provider.json
+grep '"/telegraph/credential", "exposed": true' $WORK/.config/secure-agent-lab/providers/telegraph/provider.json
+
+# And the gateway config whitelists ONLY the exposed one. A scaffold that got
+# this wrong would teach the mistake the installer exists to refuse.
+grep 'location = /telegraph/credential' $WORK/.config/secure-agent-lab/providers/telegraph/cred-gateway/telegraph.conf
+! grep 'location = /telegraph/token' $WORK/.config/secure-agent-lab/providers/telegraph/cred-gateway/telegraph.conf
+
+# Scaffolding over your own work is refused rather than merged into.
+! exec sal providers create telegraph
+stderr 'already exists'
+
+# A name the bank already has is refused too, before writing: two entries with
+# one name is ambiguous at install time, and answering it silently in either
+# direction installs something other than what was asked for.
+! exec sal providers create acme --stack-dir $FIXTURES/local-stack
+stderr 'already has an entry named "acme"'
+! exists $WORK/.config/secure-agent-lab/providers/acme
+
+# ------------------------------------------------------------- installing it
+#
+# THE point of the scaffold: it passes every check sal has, straight out of the
+# box, so the first thing you change is the provider's behaviour and not its
+# shape.
+exec sal providers add telegraph --dry-run --stack-dir $FIXTURES/local-stack
+stdout 'slot     010 \(provider band\)'
+stdout 'write    broker[/\\]telegraph\.js'
+stdout 'write    proxy[/\\]010_telegraph\.py'
+stdout 'route    /telegraph/token — not exposed to the lab'
+stdout 'route    /telegraph/credential — whitelisted for the lab'
+
+# And it says where it came from. Nobody reviewed this one but the person who
+# wrote it, and every check sal has still cannot tell whether the broker
+# provider hands the lab more than it should.
+stderr 'from your own providers directory, not from the bank'
+stderr 'Nobody has reviewed it but you'
+
+# ----------------------------------------------- a name that is in both banks
+#
+# `create` refuses this at scaffold time, but the collision can still arrive
+# later — the bank gains an entry with the name yours already has, or someone
+# writes the directory by hand. So `add` refuses it too, and refusing is the
+# only honest answer: preferring the local copy silently installs something
+# other than the reviewed entry somebody asked for, and preferring the bank
+# silently ignores the one they wrote.
+! exec sal providers add widget --stack-dir $FIXTURES/local-stack
+stderr 'names both an entry in the bank and one in'
+stderr 'will not guess which you meant'
+
+# Nothing was installed under either reading of the name.
+exec sal providers list
+! stdout 'widget'
+
+-- project/.keep --
+-- .config/secure-agent-lab/providers/widget/provider.json --
+{
+  "schema_version": 1,
+  "name": "widget",
+  "summary": "A local entry whose name the bank also uses",
+  "min_stack": "1.9.0",
+  "load_band": "provider",
+  "hosts": ["api.widget.invalid"],
+  "broker_routes": [{ "path": "/widget/token", "exposed": false }]
+}

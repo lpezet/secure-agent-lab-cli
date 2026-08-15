@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/lpezet/secure-agent-lab-cli/internal/bank"
 	"github.com/lpezet/secure-agent-lab-cli/internal/config"
 	"github.com/lpezet/secure-agent-lab-cli/internal/deployment"
 	"github.com/lpezet/secure-agent-lab-cli/internal/envfile"
@@ -17,6 +19,7 @@ import (
 	"github.com/lpezet/secure-agent-lab-cli/internal/lab"
 	"github.com/lpezet/secure-agent-lab-cli/internal/manifest"
 	"github.com/lpezet/secure-agent-lab-cli/internal/prompt"
+	"github.com/lpezet/secure-agent-lab-cli/internal/scaffold"
 	"github.com/lpezet/secure-agent-lab-cli/internal/secrets"
 )
 
@@ -225,6 +228,21 @@ func runProvidersAdd(cmd *cobra.Command, name string, dryRun bool) error {
 	}
 	defer tree.Close()
 
+	// An entry the operator wrote themselves is installed from their own
+	// providers directory. Which one this is has to be decided here, because
+	// it is also what gets recorded — the two are indistinguishable afterwards
+	// and they are not equivalent.
+	source, b, err := resolveSource(b, name)
+	if err != nil {
+		return err
+	}
+	if source == deployment.SourceLocal {
+		fmt.Fprintf(errOut, "installing %s from your own providers directory, not from the bank at %s.\n"+
+			"Nobody has reviewed it but you: every check sal has still runs, and none of\n"+
+			"them can tell whether the broker provider hands the lab more than it should.\n\n",
+			name, rec.StackTag)
+	}
+
 	// Everything that can be refused is refused here, before a byte is
 	// written. A half-installed credential path is worse than none.
 	plan, err := installer.BuildPlan(b, name, rec, occupied, rec.StackTag)
@@ -264,6 +282,7 @@ func runProvidersAdd(cmd *cobra.Command, name string, dryRun bool) error {
 	if err != nil {
 		return err
 	}
+	entry.Source = source
 	rec.Installed = append(rec.Installed, *entry)
 	if err := deployment.Save(l.Dir, rec); err != nil {
 		return err
@@ -349,20 +368,133 @@ func collectValues(cmd *cobra.Command, plan *installer.Plan, secretsDir string) 
 }
 
 func newProvidersCreateCmd() *cobra.Command {
-	var template string
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "create NAME",
-		Short: "Scaffold a new provider from a template",
-		Long: "Scaffolds a bank entry locally for a provider the bank does not carry.\n\n" +
+		Short: "Scaffold a new provider you can install into this lab",
+		Long: "Scaffolds a bank entry for a provider the bank does not carry, in your own\n" +
+			"providers directory. `sal providers add NAME` then installs it from there.\n\n" +
+			"It goes OUTSIDE the project, next to your labs and secrets. An entry is code\n" +
+			"that runs behind the credential boundary once installed, so a scaffold in the\n" +
+			"workspace would be one the agent could edit before you installed it.\n\n" +
+			"The layout is the bank's own, so what you write here can be proposed to the\n" +
+			"bank unchanged — and sal reads it with the same code that reads the bank.\n\n" +
+			"There is no --template yet. A flag with one legal value is a promise about a\n" +
+			"naming scheme nobody has designed; templates will arrive as shapes emerge from\n" +
+			"actually writing providers.\n\n" +
 			"Note the boundary: the generation constraints for writing a provider from\n" +
 			"scratch live in the stack repo's PLAYBOOK.md, which covers exactly the case a\n" +
 			"bank of finished entries cannot. This command scaffolds; it does not replace\n" +
 			"reading that.",
 		Args: cobra.ExactArgs(1),
-		RunE: notImplemented,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runProvidersCreate(cmd, args[0])
+		},
 	}
-	cmd.Flags().StringVar(&template, "template", "", "template to scaffold from")
-	return cmd
+}
+
+func runProvidersCreate(cmd *cobra.Command, name string) error {
+	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+
+	root, err := config.ProvidersDir()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(root, name)
+
+	// Refused rather than shadowed, and checked BEFORE writing anything. Two
+	// entries of the same name in two banks is a question sal has no way to
+	// answer — and answering it silently, in either direction, is how someone
+	// installs something other than the reviewed entry they asked for.
+	if taken, where := nameTakenInBank(cmd, name); taken {
+		return fmt.Errorf("the bank at %s already has an entry named %q.\n"+
+			"Two entries with one name is ambiguous at install time, so pick another name — "+
+			"or `sal providers add %s` if that entry is the one you wanted", where, name, name)
+	}
+
+	files, err := scaffold.Write(dir, name)
+	if err != nil {
+		var exists *scaffold.ErrExists
+		if errors.As(err, &exists) {
+			return fmt.Errorf("%s already exists; delete it or pick another name rather than "+
+				"having sal write over work you may have done there", exists.Dir)
+		}
+		return err
+	}
+
+	fmt.Fprintf(out, "%s\n", dir)
+	for _, f := range files {
+		fmt.Fprintf(out, "write    %s\n", f.Path)
+	}
+
+	fmt.Fprintf(errOut, "\nA skeleton, not a provider. Three things it needs before it does anything:\n"+
+		"  1. hosts in %s must match the addon exactly, both directions.\n"+
+		"  2. The broker provider must exchange the long-lived credential for something\n"+
+		"     scoped and short-lived, and never log a value.\n"+
+		"  3. Only routes marked exposed:true may appear in the cred-gateway config.\n\n"+
+		"Read PLAYBOOK.md in the stack repo — it covers writing one from scratch, which\n"+
+		"is what you are about to do. Then `sal providers add %s --dry-run` runs every\n"+
+		"check sal has against it without writing anything.\n", manifest.Filename, name)
+	return nil
+}
+
+// resolveSource decides which bank an entry name comes from, and refuses a
+// name that is in both.
+//
+// Refusing is the only answer sal can give honestly. Preferring the local copy
+// silently installs something other than the reviewed entry somebody asked
+// for; preferring the bank silently ignores the one they wrote. Both are the
+// wrong shape of surprise for a command that installs code behind a credential
+// boundary — and the refusal is what a naming scheme will eventually replace,
+// rather than something it will have to undo.
+func resolveSource(remote *bank.Bank, name string) (string, *bank.Bank, error) {
+	dir, err := config.ProvidersDir()
+	if err != nil {
+		return "", remote, err
+	}
+	local, err := bank.OpenDir(dir)
+	if err != nil {
+		return deployment.SourceBank, remote, nil
+	}
+	if _, err := local.EntryDir(name); err != nil {
+		return deployment.SourceBank, remote, nil
+	}
+	if _, err := remote.EntryDir(name); err == nil {
+		return "", remote, fmt.Errorf(
+			"%q names both an entry in the bank and one in %s.\n"+
+				"sal will not guess which you meant — rename yours, or remove it and use the "+
+				"bank's", name, filepath.Join(dir, name))
+	}
+	return deployment.SourceLocal, local, nil
+}
+
+// nameTakenInBank reports whether the bank this lab reads already has the name.
+//
+// Best-effort on purpose: not being in a lab, or not being able to reach the
+// bank, must not stop someone scaffolding a provider. What it prevents when it
+// does work is a collision discovered at install time, after the writing.
+func nameTakenInBank(cmd *cobra.Command, name string) (bool, string) {
+	l, _, err := lab.Find(cwd())
+	if err != nil {
+		return false, ""
+	}
+	rec, err := deployment.Load(l.Dir)
+	if err != nil {
+		return false, ""
+	}
+	commit, err := commitFor(cmd, rec)
+	if err != nil {
+		return false, ""
+	}
+	b, tree, err := openBank(cmd, commit)
+	if err != nil {
+		return false, ""
+	}
+	defer tree.Close()
+
+	if _, err := b.EntryDir(name); err != nil {
+		return false, ""
+	}
+	return true, rec.StackTag
 }
 
 func newProvidersRemoveCmd() *cobra.Command {

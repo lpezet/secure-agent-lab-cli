@@ -84,6 +84,13 @@ type Record struct {
 	BaseAddons []string `json:"base_addons,omitempty"`
 }
 
+// Where an entry came from. Empty is the bank, so a record written before this
+// field existed still reads correctly.
+const (
+	SourceBank  = ""
+	SourceLocal = "local"
+)
+
 // Entry records one installed bank entry: what it was, where its files went,
 // and which slot the installer assigned it.
 type Entry struct {
@@ -105,6 +112,17 @@ type Entry struct {
 	// StackTag is the release the entry's files came from, which may be older
 	// than the deployment's pin if it has not been upgraded since.
 	StackTag string `json:"stack_tag,omitempty"`
+
+	// Source says where the entry came from. Empty means the bank, which is
+	// what every entry written before this field existed came from; "local"
+	// means the operator's own providers directory.
+	//
+	// Recorded because the two cannot be told apart afterwards and they are
+	// not equivalent: a bank entry was reviewed by whoever maintains the bank
+	// and a local one was not, and `sal drift` compares each against a
+	// different tree. An optional field like this one is not a generation
+	// event — see SchemaVersion above.
+	Source string `json:"source,omitempty"`
 
 	InstalledAt time.Time `json:"installed_at,omitempty"`
 }

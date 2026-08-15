@@ -32,6 +32,24 @@ stdout 'summary\s+0 drift · 0 missing · 0 stale · 0 unowned'
 # someone is most likely to read more into it than it says.
 stderr 'known list, not a review'
 
+# ------------------------------------------- a provider you wrote yourself
+#
+# Compared against YOUR providers directory, not the bank. Comparing it against
+# the bank would report every one of its files as an entry that cannot be
+# resolved — true of the bank, and wrong about the deployment.
+# Its credential is already stored, so the install has nothing to prompt for —
+# `sal secrets set` is where a credential is typed, and never a flag here.
+exec sal providers create telegraph
+exec sal providers add telegraph --stack-dir $FIXTURES/local-stack
+exec sal drift --stack-dir $FIXTURES/local-stack
+stdout 'ok\s+proxy/011_telegraph\.py\s+matches your providers/telegraph/proxy/'
+stdout 'summary\s+0 drift'
+
+# An edit to the author's copy is drift, the same as an edit to a bank entry's.
+cp $WORK/edited.py $WORK/.config/secure-agent-lab/providers/telegraph/proxy/telegraph.py
+! exec sal drift --stack-dir $FIXTURES/local-stack
+stdout 'DRIFT\s+proxy/011_telegraph\.py\s+differs from your providers/telegraph/proxy/'
+
 # ------------------------------------------------- a lab with every finding
 cd $WORK/drifted
 
@@ -106,6 +124,11 @@ cd $WORK
 stderr 'no lab for this directory'
 
 -- project/.keep --
+-- .config/secure-agent-lab/secrets/telegraph.token --
+a-token-stored-earlier
+-- edited.py --
+# an edit the deployment has not got
+HOSTS = ("api.telegraph.invalid",)
 -- drifted/.sal/lab.json --
 {"schema_version": 1, "name": "drifted-lab", "stack_tag": "v1.9.0"}
 -- vanished/.sal/lab.json --

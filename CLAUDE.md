@@ -407,6 +407,43 @@ formats and it is still where the loopback-only observer publish, the
 `internal: true` lab network and every mount live — so an edit there is a
 change to the boundary that no other check in this repo would see.
 
+**An entry you wrote yourself lives in `~/.config/secure-agent-lab/providers/`,
+laid out exactly like the bank.** Outside the project for the same reason a
+deployment is, and it matters more here rather than less: an entry is code that
+runs behind the credential boundary once installed, so a scaffold in the
+workspace is one the agent could edit before an operator installed it. The
+layout is the bank's own so that what someone writes can be proposed to the
+bank unchanged — and so `sal` reads it with the same code that reads the bank,
+rather than a second path that could disagree about what an entry is.
+
+**A name in both banks is REFUSED, never resolved.** Preferring the local copy
+silently installs something other than the reviewed entry somebody asked for;
+preferring the bank silently ignores the one they wrote. Both are the wrong
+shape of surprise for a command that installs code behind a credential
+boundary. The refusal is also forward-compatible: a naming scheme that
+qualifies third-party entries by their source replaces it, rather than having
+to undo it. `installed.json` records `source` for the same reason — the two
+cannot be told apart afterwards, they are not equivalent (one was reviewed by
+whoever maintains the bank and one was not), and `sal drift` compares each
+against a different tree.
+
+⚠️ **`internal/scaffold` is a copy of the STACK's API, living here
+temporarily** — the same status as the compose template, and for the same
+reason. mitmproxy's hook signature, the broker's `require("../audit")` and
+nginx's location syntax are the image's API, which this repo does not version,
+so a skeleton here does not move when a deployment repins. It is here because
+the stack repo has no template to fetch yet; the intended end state is
+`bank/_template/` over there, fetched at the pinned tag exactly like a bank
+entry, at which point `internal/scaffold` is DELETED rather than ported. Keep
+it in one file and keep it dumb. While it lives here, an addon-API change needs
+a `sal` release, and a scaffold from an old `sal` may not match the release a
+lab is pinned to.
+
+**There is no `--template` flag yet.** A flag with one legal value is a promise
+about a naming scheme nobody has designed. Templates arrive when shapes emerge
+from actually writing providers — and they arrive as data in the stack repo,
+not as code here.
+
 **`providers remove` deletes what the RECORD says, and reports what merely
 looks like it.** The asymmetry is the point: deleting an unrecorded file
 because its name matches is how a removal takes out something somebody wrote by
@@ -719,7 +756,12 @@ major bump. The design is still settling, and 0.x says that out loud.
 **1.0.0 means all of these, not a feeling:**
 
 1. Every command in the grammar works, or is removed from the grammar. A
-   `--help` listing commands that exit 1 is not a 1.0.
+   `--help` listing commands that exit 1 is not a 1.0. **Done** — held by
+   `internal/cli`'s `TestEveryCommandInTheGrammarIsImplemented`, whose
+   allowlist of known stubs is empty. That test replaced the txtar script
+   which asserted each unwritten command exited non-zero; every line in it was
+   deleted by the change that implemented the command, and once the last one
+   went there was nothing left for it to guard.
 2. Both JSON formats declared stable at their current generation.
 3. The `lab_setup` question resolved — fragments install today and nothing
    sources them, so `github` and `gcp` install without fully working.
