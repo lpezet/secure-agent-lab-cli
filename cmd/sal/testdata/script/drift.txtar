@@ -18,11 +18,12 @@ exec sal init --stack-dir $FIXTURES/local-stack
 exec sal providers add widget --stack-dir $FIXTURES/local-stack
 
 exec sal drift --stack-dir $FIXTURES/local-stack
-stdout '^pinned\s+v1\.9\.2'
+stdout '^pinned\s+v1\.10\.1'
 
-# Every file it owns, from all three sources: the stack's own proxy addons, the
-# bank entry's files, and the compose file sal generated.
-stdout 'ok\s+proxy/000_policy\.py\s+matches stack/proxy/addons/'
+# Every file it owns: the bank entry's files and the compose file sal
+# generated. The stack's own proxy addons are NOT among them at 1.10.0 and
+# above — the image carries them, so the deployment holds no copy to compare.
+! stdout 'proxy/000_policy\.py'
 stdout 'ok\s+proxy/010_widget\.py\s+matches bank/widget/proxy/'
 stdout 'ok\s+broker/widget\.js\s+matches bank/widget/broker/'
 stdout 'ok\s+compose\.yaml\s+matches what sal renders'
@@ -31,6 +32,23 @@ stdout 'summary\s+0 drift · 0 missing · 0 stale · 0 unowned'
 # And it says what it did NOT check, because a clean report is exactly when
 # someone is most likely to read more into it than it says.
 stderr 'known list, not a review'
+
+# ------------------------------- a lab that vendored addons, now past 1.10.0
+#
+# The copies are not drift and not unowned: sal put them there, and at this
+# release the image ignores them. A note, because a file that reads as a
+# control it no longer is misleads whoever reads it next — and `sal upgrade`
+# is what removes it.
+cd $WORK/vendored
+! exec sal drift --stack-dir $FIXTURES/local-stack
+stdout 'note\s+proxy/000_policy\.py\s+the proxy image carries this at v1\.10\.1'
+! stdout 'MISSING\s+proxy/000_policy\.py'
+! stdout 'UNOWNED\s+proxy/000_policy\.py'
+
+# The one drift is this lab's hand-written compose stub, which is what makes
+# the counts worth asserting: the vendored addon is in none of them.
+stdout 'summary\s+1 drift · 0 missing · 0 stale · 0 unowned'
+cd $WORK/project
 
 # ------------------------------------------- a provider you wrote yourself
 #
@@ -126,6 +144,19 @@ stderr 'no lab for this directory'
 -- project/.keep --
 -- .config/secure-agent-lab/secrets/telegraph.token --
 a-token-stored-earlier
+-- .config/secure-agent-lab/labs/vendored-lab/compose.yaml --
+name: vendored-lab
+-- vendored/.sal/lab.json --
+{"schema_version": 1, "name": "vendored-lab", "stack_tag": "v1.10.1"}
+-- .config/secure-agent-lab/labs/vendored-lab/.sal/installed.json --
+{
+  "schema_version": 1,
+  "stack_tag": "v1.10.1",
+  "base_addons": ["000_policy.py"],
+  "installed": []
+}
+-- .config/secure-agent-lab/labs/vendored-lab/proxy/000_policy.py --
+# vendored before 1.10.0 baked it into the image
 -- edited.py --
 # an edit the deployment has not got
 HOSTS = ("api.telegraph.invalid",)

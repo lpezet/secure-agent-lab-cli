@@ -19,9 +19,13 @@ stdout 'rewrite proxy/010_acme\.py'
 # route the entry no longer exposes.
 stdout 'DELETE  cred-gateway/acme\.conf \(not shipped at v1\.10\.0\)'
 
-# A base addon the new release dropped goes too.
-stdout 'DELETE   002_retired\.py \(not shipped at v1\.10\.0\)'
-stdout '^addon\s+000_policy\.py'
+# THE 1.10.0 change: the proxy image carries the base addons and loads them
+# ahead of the /addons mount, so every one this lab vendors is deleted and none
+# is installed in their place. A copy that survived would read as a control it
+# no longer is — the entrypoint skips it with a warning either way.
+stdout 'DELETE   000_policy\.py \(carried by the proxy image at v1\.10\.0\)'
+stdout 'DELETE   002_retired\.py \(carried by the proxy image at v1\.10\.0\)'
+! stdout '^addon\s+000_policy\.py'
 stderr 'nothing was changed'
 
 # A dry run changes nothing at all.
@@ -45,6 +49,11 @@ grep 'v1.10.0 addon' $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/010_acme
 # The stale files are gone, not merely superseded.
 ! exists $WORK/.config/secure-agent-lab/labs/demo-lab/cred-gateway/acme.conf
 ! exists $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/002_retired.py
+
+# Including the vendored policy addon, which is the tidying the stack's own
+# upgrade notes ask a human to do by hand.
+! exists $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/000_policy.py
+! grep '000_policy' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
 
 # Both records moved: the deployment's, and the project's committable pointer.
 grep '"stack_tag": "v1.10.0"' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json

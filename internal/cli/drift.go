@@ -17,6 +17,7 @@ import (
 	"github.com/lpezet/secure-agent-lab-cli/internal/drift"
 	"github.com/lpezet/secure-agent-lab-cli/internal/installer"
 	"github.com/lpezet/secure-agent-lab-cli/internal/lab"
+	"github.com/lpezet/secure-agent-lab-cli/internal/version"
 )
 
 func newDriftCmd() *cobra.Command {
@@ -77,11 +78,19 @@ func runDrift(cmd *cobra.Command, showDiff bool) error {
 	}
 	defer tree.Close()
 
-	addons, err := fetchBaseAddons(cmd, commit)
-	if err != nil {
-		return err
+	// Not fetched at all when the release carries them in the image: there is
+	// nothing in the deployment for them to be compared against, and asking
+	// for a directory that no longer describes this deployment would report
+	// every one of them MISSING.
+	addonsDir := ""
+	if !version.StackBakesAddons(rec.StackTag) {
+		addons, err := fetchBaseAddons(cmd, commit)
+		if err != nil {
+			return err
+		}
+		defer addons.Close()
+		addonsDir = addons.Dir
 	}
-	defer addons.Close()
 
 	// An entry the operator wrote themselves is compared against their own
 	// providers directory. Comparing it against the bank would report every
@@ -92,7 +101,7 @@ func runDrift(cmd *cobra.Command, showDiff bool) error {
 		return err
 	}
 
-	expected, unresolved, owned := expectedFiles(b, local, addons.Dir, rec)
+	expected, unresolved, owned := expectedFiles(b, local, addonsDir, l.Dir, rec)
 
 	report, err := drift.Check(l.Dir, expected, owned)
 	if err != nil {
@@ -146,36 +155,60 @@ func runDrift(cmd *cobra.Command, showDiff bool) error {
 // resolved at all, and the paths those entries own — which must still count as
 // accounted for, or an entry sal cannot read would have all of its files
 // reported as if somebody smuggled them in.
-func expectedFiles(b, local *bank.Bank, addonsDir string, rec *deployment.Record) ([]drift.Expected, []drift.Finding, []string) {
+func expectedFiles(b, local *bank.Bank, addonsDir, deployDir string, rec *deployment.Record) ([]drift.Expected, []drift.Finding, []string) {
 	var (
 		expected   []drift.Expected
 		unresolved []drift.Finding
 		owned      []string
 	)
 
-	// Every addon the release ships, whether or not the record lists it: one
-	// that arrived in a later release is MISSING from this deployment, not
-	// invisible. 000_policy.py absent means the proxy has no barrier between
-	// the lab container and the broker at all.
-	shipped, err := os.ReadDir(addonsDir)
-	if err == nil {
-		for _, it := range shipped {
-			if it.IsDir() || !strings.HasSuffix(it.Name(), ".py") {
+	// This check inverts at 1.10.0, the same way scripts/check-drift.sh does.
+	//
+	// Below it, every addon the release ships is expected whether or not the
+	// record lists it: one that arrived in a later release is MISSING from
+	// this deployment, not invisible, and 000_policy.py absent means the proxy
+	// has no barrier between the lab container and the broker at all.
+	//
+	// At or above it the image carries them, so a vendored copy is not a stale
+	// control but no control — dead weight the entrypoint skips. It is
+	// reported as a NOTE and counted as accounted for: it is not drift, it is
+	// not unowned, and `sal upgrade` is what removes it.
+	if addonsDir == "" {
+		for _, name := range rec.BaseAddons {
+			path := "proxy/" + name
+			// Accounted for either way, so a copy the image ignores is not
+			// then reported as something nobody installed.
+			owned = append(owned, path)
+			if _, err := os.Stat(filepath.Join(deployDir, filepath.FromSlash(path))); err != nil {
 				continue
 			}
-			expected = append(expected, drift.Expected{
-				Path:  "proxy/" + it.Name(),
-				Src:   filepath.Join(addonsDir, it.Name()),
-				Owner: "stack/proxy/addons/",
+			unresolved = append(unresolved, drift.Finding{
+				Kind:   drift.Note,
+				Path:   path,
+				Detail: "the proxy image carries this at " + rec.StackTag + "; `sal upgrade` removes the copy",
 			})
 		}
-	}
-	// And any the deployment records that the release has stopped shipping.
-	for _, name := range rec.BaseAddons {
-		if _, err := os.Stat(filepath.Join(addonsDir, name)); err == nil {
-			continue
+	} else {
+		shipped, err := os.ReadDir(addonsDir)
+		if err == nil {
+			for _, it := range shipped {
+				if it.IsDir() || !strings.HasSuffix(it.Name(), ".py") {
+					continue
+				}
+				expected = append(expected, drift.Expected{
+					Path:  "proxy/" + it.Name(),
+					Src:   filepath.Join(addonsDir, it.Name()),
+					Owner: "stack/proxy/addons/",
+				})
+			}
 		}
-		expected = append(expected, drift.Expected{Path: "proxy/" + name, Owner: "stack/proxy/addons/"})
+		// And any the deployment records that the release has stopped shipping.
+		for _, name := range rec.BaseAddons {
+			if _, err := os.Stat(filepath.Join(addonsDir, name)); err == nil {
+				continue
+			}
+			expected = append(expected, drift.Expected{Path: "proxy/" + name, Owner: "stack/proxy/addons/"})
+		}
 	}
 
 	for _, e := range rec.Installed {

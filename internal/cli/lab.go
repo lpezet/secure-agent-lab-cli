@@ -125,26 +125,34 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 		return err
 	}
 
-	// Fetch the stack's own proxy addons BEFORE creating anything, so a lab is
-	// never left existing without them.
+	// Below 1.10.0, fetch the stack's own proxy addons BEFORE creating
+	// anything, so a lab is never left existing without them.
 	//
-	// This is not optional decoration. 000_policy.py is what stops the proxy
-	// forwarding to the broker — and the proxy sits on both networks, so
-	// without it the lab can ask the proxy to fetch http://broker:8080/<any
-	// route> and walk straight around the cred-gateway whitelist, including
-	// the routes a manifest marks exposed:false. A deployment missing it has a
-	// credential path with no gate on it.
-	addons, err := fetchBaseAddons(cmd, commit)
-	if err != nil {
-		return err
-	}
-	defer addons.Close()
+	// This is not optional decoration at those releases. 000_policy.py is what
+	// stops the proxy forwarding to the broker — and the proxy sits on both
+	// networks, so without it the lab can ask the proxy to fetch
+	// http://broker:8080/<any route> and walk straight around the cred-gateway
+	// whitelist, including the routes a manifest marks exposed:false.
+	//
+	// At 1.10.0 and above the image carries them and loads them ahead of the
+	// /addons mount, so vendoring is not a smaller control — it is none at
+	// all, and the entrypoint skips the copy with a warning naming the file.
+	var installed []string
+	baked := version.StackBakesAddons(stackTag)
+	if !baked {
+		addons, err := fetchBaseAddons(cmd, commit)
+		if err != nil {
+			return err
+		}
+		defer addons.Close()
 
-	if err := createLabTree(labDir); err != nil {
-		return err
-	}
-	installed, err := copyAddons(addons.Dir, filepath.Join(labDir, "proxy"))
-	if err != nil {
+		if err := createLabTree(labDir); err != nil {
+			return err
+		}
+		if installed, err = copyAddons(addons.Dir, filepath.Join(labDir, "proxy")); err != nil {
+			return err
+		}
+	} else if err := createLabTree(labDir); err != nil {
 		return err
 	}
 
@@ -197,6 +205,11 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 	fmt.Fprintf(out, "\nproject  %s\n", projectDir)
 	for _, a := range installed {
 		fmt.Fprintf(out, "addon    %s\n", a)
+	}
+	if baked {
+		// Said rather than left as an absence: a reader who knows the older
+		// shape would otherwise wonder which control went missing.
+		fmt.Fprintf(out, "addons   carried by the proxy image at %s, not vendored here\n", stackTag)
 	}
 
 	fmt.Fprintf(errOut, "\nNext: `sal providers add <name>` to give it a credential path, then `sal up`.\n"+
@@ -464,13 +477,21 @@ func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
 	}
 	defer tree.Close()
 
-	addons, err := fetchBaseAddons(cmd, toCommit)
-	if err != nil {
-		return err
+	// An empty addons directory tells the planner this release carries them in
+	// the image — which also makes every addon the lab currently vendors
+	// stale, and an upgrade deletes stale files. That is the tidying the
+	// stack's own upgrade notes ask a human to do by hand.
+	addonsDir := ""
+	if !version.StackBakesAddons(to) {
+		addons, err := fetchBaseAddons(cmd, toCommit)
+		if err != nil {
+			return err
+		}
+		defer addons.Close()
+		addonsDir = addons.Dir
 	}
-	defer addons.Close()
 
-	plan, err := installer.BuildUpgradePlan(b, addons.Dir, rec, to, toCommit)
+	plan, err := installer.BuildUpgradePlan(b, addonsDir, rec, to, toCommit)
 	if err != nil {
 		return err
 	}
@@ -495,7 +516,11 @@ func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
 		fmt.Fprintf(out, "addon    %s\n", a)
 	}
 	for _, a := range plan.StaleAddons {
-		fmt.Fprintf(out, "DELETE   %s (not shipped at %s)\n", a, plan.ToTag)
+		why := "not shipped at " + plan.ToTag
+		if version.StackBakesAddons(plan.ToTag) {
+			why = "carried by the proxy image at " + plan.ToTag
+		}
+		fmt.Fprintf(out, "DELETE   %s (%s)\n", a, why)
 	}
 
 	if dryRun {
