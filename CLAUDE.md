@@ -407,6 +407,27 @@ formats and it is still where the loopback-only observer publish, the
 `internal: true` lab network and every mount live — so an edit there is a
 change to the boundary that no other check in this repo would see.
 
+**`providers remove` deletes what the RECORD says, and reports what merely
+looks like it.** The asymmetry is the point: deleting an unrecorded file
+because its name matches is how a removal takes out something somebody wrote by
+hand, while leaving one costs a line of output. The file that matters most is
+the cred-gateway config — left behind it keeps whitelisting a route whose
+broker provider is gone, which is the same widened boundary `upgrade`'s stale
+deletion exists to prevent and `drift` reports as STALE.
+
+**Removing a provider never deletes a credential.** Reinstalling the provider
+undoes the removal; deleting a credential undoes nothing, and the two are
+different decisions. The paths are printed so `rm` is one line away for someone
+who meant both. There is no prompt on the removal itself: it narrows the
+boundary, and a confirmation on a safe reversible action only teaches people to
+clear prompts — the same rule `labs down` follows.
+
+Its variables DO go, from `.env` and `lab.env`, and they come from the
+manifest — never from the provider's name. An entry the bank no longer carries
+still has its recorded files removed, and its variables are reported as left
+behind rather than guessed at: deriving env keys from a provider name is
+exactly the per-provider knowledge this repo has none of.
+
 **A function that reads state must not quietly write it.** Slot observation
 once appended what it found on disk to the install record, and its caller saved
 that record — writing the stack's own proxy addons into `installed.json` as if

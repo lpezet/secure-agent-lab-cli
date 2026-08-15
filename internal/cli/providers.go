@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/lpezet/secure-agent-lab-cli/internal/config"
 	"github.com/lpezet/secure-agent-lab-cli/internal/deployment"
+	"github.com/lpezet/secure-agent-lab-cli/internal/envfile"
 	"github.com/lpezet/secure-agent-lab-cli/internal/installer"
 	"github.com/lpezet/secure-agent-lab-cli/internal/lab"
 	"github.com/lpezet/secure-agent-lab-cli/internal/manifest"
@@ -364,14 +366,255 @@ func newProvidersCreateCmd() *cobra.Command {
 }
 
 func newProvidersRemoveCmd() *cobra.Command {
-	return &cobra.Command{
+	var dryRun bool
+	cmd := &cobra.Command{
 		Use:   "remove NAME",
 		Short: "Remove an installed provider and its files",
 		Long: "Removes exactly the files .sal/installed.json records for the entry, rather\n" +
 			"than guessing from filenames. Removing a provider narrows the boundary, so it\n" +
 			"is safe to get slightly wrong in the cautious direction and dangerous to get\n" +
-			"wrong in the other: leave anything unrecorded in place and say so.",
+			"wrong in the other: leave anything unrecorded in place and say so.\n\n" +
+			"The cred-gateway config is the file that matters most here. Left behind, it\n" +
+			"keeps whitelisting a route to a broker provider that is gone — a widened\n" +
+			"boundary nothing else would report.\n\n" +
+			"Credentials are NOT deleted. Removing a provider is reversible by reinstalling\n" +
+			"it; deleting a credential is not, and the two are different decisions. Which\n" +
+			"files were left is printed, so `rm` is one line away if that is what you meant.\n\n" +
+			"No confirmation prompt: this narrows the boundary, and a prompt on a safe\n" +
+			"action only teaches people to clear prompts.",
 		Args: cobra.ExactArgs(1),
-		RunE: notImplemented,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runProvidersRemove(cmd, args[0], dryRun)
+		},
+	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report what would be removed, and remove nothing")
+	return cmd
+}
+
+func runProvidersRemove(cmd *cobra.Command, name string, dryRun bool) error {
+	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+
+	l, _, err := lab.Find(cwd())
+	if err != nil {
+		return err
+	}
+	if !l.Exists() {
+		return fmt.Errorf("lab %q has no deployment at %s; run `sal init`", l.Name, l.Dir)
+	}
+	rec, err := deployment.Load(l.Dir)
+	if err != nil {
+		return err
+	}
+
+	// Exact match, for the reason a lab name is: two entries whose names share
+	// a prefix are exactly where a guess does damage, and the damage here is
+	// deleting the files of a credential path somebody is using.
+	entry, rest, found := takeEntry(rec.Installed, name)
+	if !found {
+		return fmt.Errorf("%q is not installed in lab %q.\n%s", name, l.Name, installedMenu(rec))
+	}
+
+	fmt.Fprintf(out, "%s — slot %03d\n", entry.Name, entry.Slot)
+	for _, f := range entry.Files {
+		fmt.Fprintf(out, "delete   %s\n", f)
+	}
+
+	// Read for its env keys only. An entry the bank no longer carries still
+	// gets its recorded files removed — those are recorded, not derived — and
+	// the keys are reported as left behind rather than guessed at.
+	m := manifestFor(cmd, rec, entry.Name)
+	if m != nil {
+		for _, k := range envKeysOf(m) {
+			fmt.Fprintf(out, "unset    %s\n", k)
+		}
+	}
+
+	if dryRun {
+		fmt.Fprintf(errOut, "\ndry run: nothing was removed\n")
+		return nil
+	}
+
+	for _, f := range entry.Files {
+		path := filepath.Join(l.Dir, filepath.FromSlash(f))
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+
+	if m != nil {
+		if err := envfile.Remove(filepath.Join(l.Dir, envFileName), envKeysOf(m)); err != nil {
+			return err
+		}
+		if err := envfile.Remove(filepath.Join(l.Dir, labEnvFileName), sortedKeys(m.LabEnv)); err != nil {
+			return err
+		}
+	}
+
+	rec.Installed = rest
+	if err := deployment.Save(l.Dir, rec); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(errOut, "\nremoved %s from %s\n", entry.Name, l.Name)
+	if m == nil {
+		fmt.Fprintf(errOut, "warning: %s could not be read from the bank at %s, so any variables it\n"+
+			"         declared are still in %s. Nothing reads them now, but they describe a\n"+
+			"         credential path that no longer exists.\n", entry.Name, rec.StackTag, envFileName)
+	}
+	reportLeftBehind(cmd, l.Dir, entry, rec)
+	reportKeptSecrets(cmd, m)
+	fmt.Fprintf(errOut, "\nRun `sal up` to restart the lab without it — the broker, proxy and\n"+
+		"cred-gateway read these files at startup, so a running lab is still serving\n"+
+		"the routes this removed.\n")
+	return nil
+}
+
+// takeEntry returns the named entry and the others.
+func takeEntry(entries []deployment.Entry, name string) (deployment.Entry, []deployment.Entry, bool) {
+	var (
+		found deployment.Entry
+		rest  []deployment.Entry
+		ok    bool
+	)
+	for _, e := range entries {
+		if e.Name == name {
+			found, ok = e, true
+			continue
+		}
+		rest = append(rest, e)
+	}
+	if rest == nil {
+		rest = []deployment.Entry{}
+	}
+	return found, rest, ok
+}
+
+func installedMenu(rec *deployment.Record) string {
+	names := rec.Names()
+	if len(names) == 0 {
+		return "This lab has no providers installed."
+	}
+	return "It has: " + strings.Join(names, ", ")
+}
+
+// manifestFor reads an entry's manifest from the bank at the pin, or nil.
+//
+// Nil is a normal answer, not a failure: an entry can be removed from the bank
+// between installing it and removing it, and a deployment that cannot reach the
+// network still needs to be able to take a provider out. Whatever this cannot
+// answer is REPORTED rather than guessed — the alternative is deriving env keys
+// from a provider name, which is the per-provider knowledge this repo has none
+// of.
+func manifestFor(cmd *cobra.Command, rec *deployment.Record, name string) *manifest.Manifest {
+	commit, err := commitFor(cmd, rec)
+	if err != nil {
+		return nil
+	}
+	b, tree, err := openBank(cmd, commit)
+	if err != nil {
+		return nil
+	}
+	defer tree.Close()
+
+	m, err := b.Manifest(name)
+	if err != nil {
+		return nil
+	}
+	return m
+}
+
+// envKeysOf returns the .env keys an entry owns: the path variables its
+// secrets are read through, and its configuration. Not lab.env, which is a
+// different file for a different container.
+func envKeysOf(m *manifest.Manifest) []string {
+	var keys []string
+	for _, s := range m.Secrets {
+		keys = append(keys, s.Env)
+	}
+	for _, c := range m.Config {
+		keys = append(keys, c.Env)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// reportLeftBehind names files that look like this entry's and that nothing
+// recorded, which are therefore still in place.
+//
+// The cautious direction, and it is not symmetric: deleting an unrecorded file
+// because its name matches is how a provider removal takes out something
+// somebody wrote by hand, while leaving one costs a line of output. A
+// cred-gateway config in this state is worth chasing, because it keeps
+// whitelisting a route whose broker provider has just been deleted.
+func reportLeftBehind(cmd *cobra.Command, deployDir string, entry deployment.Entry, rec *deployment.Record) {
+	recorded := map[string]bool{}
+	for _, e := range rec.Installed {
+		for _, f := range e.Files {
+			recorded[filepath.ToSlash(f)] = true
+		}
+	}
+
+	var left []string
+	for _, dir := range []string{"broker", "proxy", "cred-gateway", "lab"} {
+		items, err := os.ReadDir(filepath.Join(deployDir, dir))
+		if err != nil {
+			continue
+		}
+		for _, it := range items {
+			if it.IsDir() || !strings.Contains(it.Name(), entry.Name) {
+				continue
+			}
+			rel := dir + "/" + it.Name()
+			if !recorded[rel] {
+				left = append(left, rel)
+			}
+		}
+	}
+	if len(left) == 0 {
+		return
+	}
+
+	sort.Strings(left)
+	fmt.Fprintf(cmd.ErrOrStderr(), "\nwarning: these look like %s and nothing recorded them, so they are still\n"+
+		"         here: %s\n"+
+		"         Check them by hand. A cred-gateway config left behind keeps whitelisting\n"+
+		"         a route whose provider is gone.\n", entry.Name, strings.Join(left, ", "))
+}
+
+// reportKeptSecrets names the credential files that stayed.
+func reportKeptSecrets(cmd *cobra.Command, m *manifest.Manifest) {
+	if m == nil || len(m.Secrets) == 0 {
+		return
+	}
+	secretsDir, err := config.SecretsDir()
+	if err != nil {
+		return
+	}
+
+	var kept []string
+	for _, s := range m.Secrets {
+		path := filepath.Join(secretsDir, s.File)
+		if _, err := os.Stat(path); err == nil {
+			kept = append(kept, path)
+		}
+	}
+	if len(kept) == 0 {
+		return
+	}
+
+	sort.Strings(kept)
+	fmt.Fprintf(cmd.ErrOrStderr(), "\nIts credentials were kept, because deleting one is not reversible and is a\n"+
+		"different decision from removing a provider:\n")
+	for _, k := range kept {
+		fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", k)
 	}
 }

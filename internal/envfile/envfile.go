@@ -117,3 +117,40 @@ func Read(path string) (map[string]string, error) {
 	}
 	return values, scan.Err()
 }
+
+// Remove deletes assignments by key, leaving every other line untouched.
+//
+// The inverse of Upsert and used by `sal providers remove`: a provider's keys
+// name files under the secrets directory and configuration only it reads, so
+// leaving them behind after its files are gone describes a credential path
+// that no longer exists. A key that is not there is not an error — the point
+// is the state afterwards, not who got there first.
+func Remove(path string, keys []string) error {
+	drop := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		drop[k] = true
+	}
+
+	existing, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	var out bytes.Buffer
+	scan := bufio.NewScanner(bytes.NewReader(existing))
+	for scan.Scan() {
+		line := scan.Text()
+		if k, ok := key(line); ok && drop[k] {
+			continue
+		}
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	if err := scan.Err(); err != nil {
+		return err
+	}
+	return os.WriteFile(path, out.Bytes(), 0o600)
+}

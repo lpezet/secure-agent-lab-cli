@@ -6,8 +6,9 @@ credentials to the agent's process.
 
 > **Status: early, and pre-1.0 honestly.** `init`, `up`, `down`, `upgrade`,
 > `drift`, `open`, `features list|enable|disable`, `providers add|list`,
-> `secrets set|list`, `labs list|down` and `observer open|tail` work against a
-> real stack. `providers create|remove` are still stubs that exit non-zero —
+> `secrets set|list`, `providers remove`, `labs list|down` and
+> `observer open|tail` work against a real stack. `providers create` is the one
+> stub left, and it exits non-zero —
 > deliberately, since a stub returning 0 would let a script believe a
 > credential was stored.
 
@@ -55,6 +56,7 @@ sal upgrade                  repin to a newer stack release AND update the files
 sal drift                    report files that differ from the pinned release
 
 sal providers add NAME       install a bank entry
+sal providers remove NAME    delete exactly what the record says it installed
 sal providers create NAME    scaffold a new one
 sal secrets set PROVIDER     store a credential, read from the terminal with echo off
 sal secrets list             what is stored, what is loose, what nothing claims

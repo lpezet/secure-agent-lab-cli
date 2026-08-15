@@ -20,8 +20,12 @@ import (
 const profilesVar = "COMPOSE_PROFILES"
 
 // envFileName is the deployment's own environment, read by broker and proxy.
-// Not lab.env: the lab container must never receive the broker's environment.
-const envFileName = ".env"
+// labEnvFileName is the lab container's, and they are two files rather than
+// one because the lab must never receive the broker's environment.
+const (
+	envFileName    = ".env"
+	labEnvFileName = "lab.env"
+)
 
 // newFeaturesCmd builds the `sal features` group.
 //

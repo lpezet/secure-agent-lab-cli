@@ -12,9 +12,6 @@
 ! exec sal providers create acme
 stderr 'not implemented yet'
 
-! exec sal providers remove acme
-stderr 'not implemented yet'
-
 # The error names the full command path, so a failure in a script says which
 # invocation it came from.
 ! exec sal providers create acme
