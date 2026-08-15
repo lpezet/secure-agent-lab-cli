@@ -7,7 +7,7 @@ COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null)
 LDFLAGS := -X $(PKG)/internal/version.version=$(VERSION) \
            -X $(PKG)/internal/version.commit=$(COMMIT)
 
-.PHONY: all build test vet fmt check clean snapshot
+.PHONY: all build test vet fmt fmt-check check clean snapshot
 
 all: check build
 
@@ -23,10 +23,19 @@ vet:
 fmt:
 	$(GO) fmt ./...
 
-# What CI runs. Two parts of it are not optional extras: internal/invariants is
-# the guard on this repo having no per-provider code, and cmd/sal's txtar
-# scripts are where the command grammar is actually asserted.
-check: vet test
+# The same check CI makes, rather than rewriting: `make check` failing here and
+# CI failing there should be the same event. It was not, once — a stray blank
+# line passed vet and tests and was caught only after a PR was open.
+fmt-check:
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "not gofmt'd:"; echo "$$unformatted"; exit 1; \
+	fi
+
+# What CI runs, and it must stay that. Two parts of it are not optional extras:
+# internal/invariants is the guard on this repo having no per-provider code, and
+# cmd/sal's txtar scripts are where the command grammar is actually asserted.
+check: vet fmt-check test
 
 # Run a single txtar script:  make script SCRIPT=grammar
 script:
