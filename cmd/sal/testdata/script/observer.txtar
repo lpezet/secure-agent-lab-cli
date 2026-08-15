@@ -1,0 +1,144 @@
+# `sal observer open` and `sal observer tail` read the audit trail — the record
+# of everything the agent did through this lab.
+#
+# Two fakes, both first on PATH and both exercising sal's real code path rather
+# than a seam cut for tests: the fake docker answers `compose port observer
+# 9000` with an address, and `observerd` (see cmd/sal/main_test.go) serves real
+# server-sent events on a real loopback port at that address.
+
+[windows] skip 'the fakes are /bin/sh scripts'
+
+env PATH=$FIXTURES/fake-docker:$FIXTURES/fake-browser:$PATH
+env BROWSER=fake-browser
+env FAKE_BROWSER_LOG=$WORK/browser.log
+
+# ------------------------------------------------------------- with no lab
+#
+# Not "no observer" — there is nothing here to have one.
+! exec sal observer open
+stderr 'no lab for this directory'
+! exec sal observer tail
+stderr 'no lab for this directory'
+
+cd project
+exec sal init --stack-dir $FIXTURES/local-stack
+
+# ------------------------------------------------------ with a lab, stopped
+#
+# sal never picks the observer's host port — the compose file publishes
+# 127.0.0.1::9000 and Docker assigns one — so a lab that is not running has no
+# port to read back and no URL to print. The message says how to fix it rather
+# than reporting a connection that failed.
+! exec sal observer open
+stderr 'not running'
+stderr 'sal up'
+
+# And nothing on stdout, which is the contract below: stdout is the URL.
+! stdout .
+
+! exec sal observer tail
+stderr 'not running'
+
+# Nothing was launched at a URL that does not exist yet.
+! exists $WORK/browser.log
+
+# ------------------------------------------------------ with a lab, running
+env FAKE_DOCKER_PORT=127.0.0.1:49153
+
+# The URL is the ONLY thing on stdout, so a script can take it — and so it
+# survives in scrollback when the browser launch silently does nothing, which
+# is the ordinary case over SSH, in WSL and inside a dev container.
+exec sal observer open --no-open
+stdout '^http://127\.0\.0\.1:49153$'
+! stdout 'opening'
+! exists $WORK/browser.log
+
+# The loopback prefix comes through untouched. The trail is served over plain
+# HTTP with no auth and is only safe for not being reachable off the host.
+! stdout '0\.0\.0\.0'
+
+# Without --no-open a launcher is asked, and it gets the same URL that was
+# printed — not a second one built somewhere else.
+exec sal observer open
+stdout '^http://127\.0\.0\.1:49153$'
+waitfor $WORK/browser.log
+grep '^http://127\.0\.0\.1:49153$' $WORK/browser.log
+stderr 'opening with'
+
+# The URL comes first, before anything that can fail. Assert the order, not
+# just the presence: printing it after a launch that hangs or crashes is the
+# failure this design exists to prevent.
+stderr 'the URL above'
+
+# ---------------------------------------------------------------- tail
+#
+# A real server on a real port, reached the way sal reaches the real observer:
+# by asking Docker which port it assigned.
+cd $WORK
+observerd events.jsonl
+cd project
+
+exec sal observer tail --follow=false
+
+# Rendered by shape — the three fields every writer in the stack emits, then
+# whatever else the line carried. sal has never heard of any of these values.
+stdout '2026-08-15T09:00:00\+00:00\s+proxy\s+request_allowed\s+host=api\.example\.test'
+stdout 'cred-gateway\s+request\s+method=POST path=/acme/token status=403'
+
+# A field sal does not know is printed, not dropped. A formatter that only
+# rendered fields it recognised would quietly hide the part of an event that
+# was worth reading.
+stdout 'provider=acme'
+
+# Something in the trail that is not an event object still reaches the reader.
+stdout 'not json at all'
+
+# The trail is the only thing on stdout, so it can be piped straight into grep.
+# Everything sal says about the trail is on stderr.
+stderr 'tailing http://127\.0\.0\.1:\d+/events'
+! stdout 'tailing'
+
+# ------------------------------------------------------------ an empty trail
+#
+# Said out loud, because no output and "could not read it" look identical.
+cd $WORK
+observerd empty.jsonl
+cd project
+exec sal observer tail --follow=false
+! stdout .
+stderr 'nothing in the trail yet'
+
+# --------------------------------------------------- the observer goes away
+#
+# Following a stream that ends means the container it came from disappeared.
+# Exiting 0 would tell a script the tail ended normally.
+cd $WORK
+observerd -close events.jsonl
+cd project
+! exec sal observer tail
+stderr 'closed the stream'
+
+# What did arrive before it ended was still printed.
+stdout 'request_allowed'
+
+# ------------------------------------------------- nothing can open a browser
+#
+# A PATH with sal and the fake docker and nothing else: no xdg-open, no
+# wslview, and $BROWSER pointing at something no longer on it.
+env PATH=$SALBIN:$FIXTURES/fake-docker
+env FAKE_DOCKER_PORT=127.0.0.1:49153
+exec sal observer open
+stderr 'no browser launcher'
+
+# Exit 0, and the URL still printed. The command's job is to give you the URL;
+# reporting failure for a browser that did not start would say a command which
+# did its job did not.
+stdout '^http://127\.0\.0\.1:49153$'
+
+-- project/.keep --
+-- empty.jsonl --
+-- events.jsonl --
+{"ts":"2026-08-15T09:00:00+00:00","service":"proxy","event":"request_allowed","host":"api.example.test"}
+{"ts":"2026-08-15T09:00:01+00:00","service":"broker","event":"cred_issued","provider":"acme","cache":"miss"}
+{"ts":"2026-08-15T09:00:02+00:00","service":"cred-gateway","event":"request","method":"POST","path":"/acme/token","status":403}
+{"ts":"2026-08-15T09:00:03+00:00","service":"observer","event":"unparseable_line","source":"proxy.jsonl","raw":"not json at all"}

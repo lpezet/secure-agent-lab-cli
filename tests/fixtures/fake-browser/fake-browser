@@ -1,0 +1,16 @@
+#!/bin/sh
+# A fake browser launcher for the txtar scripts that exercise
+# `sal observer open`. Point $BROWSER at it, with its directory on PATH:
+#
+#   env PATH=$FIXTURES/fake-browser:$PATH
+#   env BROWSER=fake-browser
+#
+# $BROWSER rather than a fake xdg-open on purpose: it is honoured on every
+# platform sal builds for, so one script covers them all, and it exercises the
+# same lookup an operator's own setting goes through.
+#
+# It records its argv and exits, which is exactly what a real launcher does —
+# including the part sal cannot see, where exiting 0 is no evidence that
+# anything was displayed.
+[ -n "$FAKE_BROWSER_LOG" ] && echo "$@" >>"$FAKE_BROWSER_LOG"
+exit "${FAKE_BROWSER_STATUS:-0}"

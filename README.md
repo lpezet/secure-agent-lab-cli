@@ -5,10 +5,11 @@ Docker stack that runs autonomous agents without exposing long-lived
 credentials to the agent's process.
 
 > **Status: early, and pre-1.0 honestly.** `init`, `up`, `down`, `upgrade`,
-> `providers add|list` and `secrets set|list` work against a real stack.
-> `open`, `drift`, `features`, `observer` and `labs` are still stubs that exit
-> non-zero — deliberately, since a stub returning 0 would let a script believe
-> a credential was stored.
+> `providers add|list`, `secrets set|list`, `labs list|down` and
+> `observer open|tail` work against a real stack. `open`, `drift`,
+> `providers create|remove` and `features` are still stubs that exit non-zero —
+> deliberately, since a stub returning 0 would let a script believe a
+> credential was stored.
 
 ## What it is for
 
@@ -57,7 +58,8 @@ sal providers create NAME    scaffold a new one
 sal secrets set PROVIDER     store a credential, read from the terminal with echo off
 sal secrets list             what is stored, what is loose, what nothing claims
 sal features enable NAME     lifecycle verbs, uniform across every feature
-sal observer open | tail     read the audit trail
+sal observer open            print the audit trail's URL, then try a browser
+sal observer tail            stream the audit trail to a terminal with no browser
 sal labs list                what is running on this machine with credentials attached
 sal labs down NAME | --all   stop one from anywhere, or every one of them
 ```
@@ -73,6 +75,14 @@ for widening its own allowlist.
 the secrets directory mounted. That is what `sal labs list` is for, and
 `sal labs down` is how you stop one whose project no longer exists — the case
 `sal down` cannot reach, because it finds a lab from a project.
+
+**The URL comes before the browser, always.** `sal observer open` prints the
+observer's URL on stdout and only then attempts to launch something. A launch
+fails silently over SSH, in WSL and inside a dev container, so printing
+afterwards would lose the one useful output exactly where it is hardest to get
+back. `--no-open` prints it and attempts nothing, which is also how a script
+gets it: stdout is the URL and nothing else. For a terminal with no browser at
+all, `sal observer tail` streams the same trail as text.
 
 **`sal` knows nothing about any provider, including its credentials.**
 `sal secrets set anthropic` asks for an OAuth token and then an API key, in that
