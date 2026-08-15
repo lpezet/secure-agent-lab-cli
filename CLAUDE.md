@@ -207,6 +207,44 @@ loopback-only binding survives untouched. Keep the `127.0.0.1` prefix: observer
 publishes the audit trail over plain HTTP with no auth, and it is only safe
 because it is not reachable off the host.
 
+**A lab that is not running has no observer URL, and that is the whole
+answer.** Because the port comes from Docker rather than from anything `sal`
+stores, there is nowhere to look it up — a stopped lab has no published port at
+all. So `observer open` and `observer tail` say the lab is not running and name
+`sal up`, rather than printing a URL that would fail to connect. Whether
+`docker compose port` answers a stopped service with an empty line or an error
+has varied between compose versions, so both are read as the same finding; the
+daemon itself was already checked one step earlier.
+
+**A browser that will not start is not a failed command.** `observer open`'s
+job is to give you the URL, and it has done that before anything is launched.
+Exiting non-zero when no launcher exists would report a command that did its
+job as having failed — and the failure that matters is invisible anyway: a
+launcher that exits 0 and displays nothing is the ordinary case in a dev
+container. `$BROWSER` is honoured first on every platform, and `wslview` is
+tried before `xdg-open` because on WSL `xdg-open` frequently exists and does
+nothing. `sal` never waits for what it launched: `$BROWSER` is often a browser
+rather than a launcher, and one with no window open yet runs in the foreground
+until it is closed.
+
+**The audit trail is rendered by shape, never by provider.** `observer tail`
+reads the observer's `/events` stream and prints the three fields every writer
+in the stack agrees on — `ts`, `service`, `event` — then whatever else the line
+carried, as `key=value`. This is the no-per-provider-code rule reaching the one
+place it would be easy to forget it applies: a formatter that gave `github` or
+`anthropic` events their own layout would be vendor knowledge, and it would
+silently hide fields it did not recognise. Nothing is dropped, including a line
+that is not JSON at all.
+
+**The stream has no end, so `--follow=false` ends on quiet.** Every connection
+replays a backlog of recent events and then stays open, with no marker between
+the two — so "print the history and exit" cannot be implemented against a
+boundary, because there is none. It is defined instead as everything that
+arrived before the stream went quiet. Conversely a stream that *ends* while
+following means the observer's container went away, and that is an error: a
+tail that exits 0 tells a script it finished normally when what it was watching
+disappeared.
+
 **The deployment lives outside the project.** Two trees:
 
 ```
@@ -503,6 +541,12 @@ which it does over SSH, in WSL, and inside a dev container. That last case is
 the main path for this project, not an edge case. `sal observer tail` is the
 answer for a terminal with no browser at all.
 
+**Stdout is the URL; everything else is stderr.** That falls out of the rule
+above rather than being a second decision — `--no-open` is then also how a
+script takes the URL, with no format to parse and nothing to strip. Same
+division in `tail`: the trail is on stdout and can go straight into `grep`,
+while which URL is being tailed goes to stderr.
+
 ## Language and build
 
 **Go, with `spf13/cobra`.** Settled 2026-08-11. The requirement was a single
@@ -645,6 +689,24 @@ on `PATH` makes both deterministic, and exercises the real `exec` path and the
 real JSON decode rather than a seam cut into the production code for testing.
 Note this is the *reading* half only; the warning above still stands for
 anything that starts containers.
+
+The same technique extends past Docker. `observer tail` is tested against a
+real SSE server on a real loopback port, started by the `observerd` testscript
+command, which publishes its address for the fake `docker` to answer
+`compose port observer 9000` with — so the path under test runs end to end,
+from asking Docker for the port through the HTTP read to the formatted line.
+`sal observer open`'s launcher is `$BROWSER` pointed at a script that records
+its argv, which is honoured on every platform `sal` builds for and so needs no
+per-OS fake.
+
+**But testscript cannot see the one rule `observer open` exists for.** It
+captures stdout and stderr separately, so a version that launched a browser
+*first* and printed the URL afterwards passes every assertion a script can
+make — while being precisely the bug the design is shaped around. That
+ordering is checked by a unit test giving both streams one buffer, which is
+what an operator's terminal actually is. Worth remembering as a general
+limit rather than a fact about this command: when the property is *relative
+order across the two streams*, txtar is the wrong layer.
 
 **A container is right for the install script, and wrong for the lab.** Testing
 `curl … | bash` across `debian:slim`, `alpine` and `ubuntu`, as root and

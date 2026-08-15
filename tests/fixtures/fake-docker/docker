@@ -30,6 +30,9 @@
 #                        a script can assert which labs were acted on
 #   FAKE_DOCKER_FAIL     compose files containing this substring exit 1, for
 #                        testing that one failure does not abandon the rest
+#   FAKE_DOCKER_PORT     what `compose -f FILE port observer 9000` answers.
+#                        Unset means the service has no container, which is how
+#                        a lab that is not running looks
 
 [ "$1" = compose ] || exit 1
 
@@ -47,6 +50,13 @@ ls)
 	if [ -n "$FAKE_DOCKER_FAIL" ] && [ "${file#*"$FAKE_DOCKER_FAIL"}" != "$file" ]; then
 		echo "fake docker: refusing $file" >&2
 		exit 1
+	fi
+	# `port` answers with a published address and nothing else, because sal
+	# reads its stdout. An unset FAKE_DOCKER_PORT is the shape docker has for a
+	# service with no container: empty output, exit 0.
+	if [ "$verb" = port ]; then
+		[ -n "$FAKE_DOCKER_PORT" ] && echo "$FAKE_DOCKER_PORT"
+		exit 0
 	fi
 	echo "fake docker: compose $verb $file"
 	;;
