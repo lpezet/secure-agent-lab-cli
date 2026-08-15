@@ -39,6 +39,16 @@ type Record struct {
 	// refused when above what this build supports — see internal/schema. This
 	// file is read by check-drift.sh in the stack repo, so its shape is a
 	// contract with another repository, not just with a later sal.
+	//
+	// Adding an OPTIONAL field here is not a generation event, which is the
+	// opposite of the rule for bank manifests — and the difference is one line
+	// of code, not a judgement call. A manifest is decoded with
+	// DisallowUnknownFields (the schema says additionalProperties:false), so a
+	// new field makes every older sal fail to read the file at all. This one is
+	// decoded plainly, so an older sal ignores what it does not know and still
+	// gets a correct answer to every question it asks. A field that CHANGES the
+	// meaning of an existing one, or that a reader must honour to stay correct,
+	// is a generation event wherever it lives.
 	SchemaVersion int `json:"schema_version"`
 
 	// StackTag is the release this deployment is pinned to, in tag spelling.
@@ -48,6 +58,19 @@ type Record struct {
 	// rendered. A tag is mutable, so the tag alone records an intention;
 	// this records what was actually used.
 	StackCommit string `json:"stack_commit,omitempty"`
+
+	// ProjectDir is the project this deployment serves, and the only place the
+	// lab→project direction is written down. The project→lab direction is the
+	// pointer at <project>/.sal/lab.json; the lab name derives from the
+	// project's path but a hash cannot be inverted, so without this an
+	// inventory of the labs directory cannot say what any of them is FOR.
+	//
+	// Absolute, and that is fine here in a way it is not in the pointer: the
+	// pointer is committed and must describe no machine, while this file never
+	// leaves the deployment. It is a claim rather than an observation — the
+	// directory may since have been deleted, or have stopped pointing back —
+	// and `sal labs list` checks it rather than trusting it.
+	ProjectDir string `json:"project_dir,omitempty"`
 
 	// Installed lists every bank entry installed here.
 	Installed []Entry `json:"installed"`

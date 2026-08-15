@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/lpezet/secure-agent-lab-cli/internal/config"
@@ -56,9 +57,17 @@ type Pointer struct {
 
 // Lab is a resolved deployment.
 type Lab struct {
-	Name       string // directory name under labs/
-	Dir        string // the deployment directory
-	ProjectDir string // the project this lab belongs to
+	Name string // directory name under labs/
+	Dir  string // the deployment directory
+
+	// ProjectDir is the project this lab belongs to, and it is set only by
+	// Find — which learns it by walking up from a directory that actually
+	// holds the pointer. All leaves it empty on purpose: from the labs
+	// directory the project is a CLAIM in the deployment's record, not
+	// something discovered, and `sal labs list` exists partly to check that
+	// claim against reality. Filling this in from the record would erase the
+	// difference between the two.
+	ProjectDir string
 }
 
 // composeName is what Docker Compose accepts as a project name. Compose is
@@ -137,25 +146,14 @@ func Find(start string) (*Lab, *Pointer, error) {
 	}
 
 	for {
-		path := filepath.Join(dir, PointerDir, PointerFile)
-		b, err := os.ReadFile(path)
+		p, err := PointerAt(dir)
 		switch {
 		case err == nil:
-			var p Pointer
-			if err := json.Unmarshal(b, &p); err != nil {
-				return nil, nil, fmt.Errorf("%s: %w", path, err)
-			}
-			if err := schema.Check("lab pointer", p.SchemaVersion, path); err != nil {
-				return nil, nil, err
-			}
-			if p.Name == "" {
-				return nil, nil, fmt.Errorf("%s names no lab", path)
-			}
 			l, err := forName(p.Name, dir)
 			if err != nil {
 				return nil, nil, err
 			}
-			return l, &p, nil
+			return l, p, nil
 		case errors.Is(err, fs.ErrNotExist):
 		default:
 			return nil, nil, err
@@ -167,6 +165,70 @@ func Find(start string) (*Lab, *Pointer, error) {
 		}
 		dir = parent
 	}
+}
+
+// PointerAt reads <dir>/.sal/lab.json and does NOT walk up.
+//
+// That distinction is the whole reason it is separate from Find. Find answers
+// "which lab does this directory work under", so an ancestor's pointer is the
+// right answer. Asking whether a PARTICULAR directory still points at a
+// particular lab — which is how `sal labs list` tells a live lab from a
+// forgotten one — is a different question, and an ancestor's pointer is a
+// wrong answer to it.
+//
+// A missing pointer is reported as fs.ErrNotExist so callers can tell it from
+// a malformed one.
+func PointerAt(dir string) (*Pointer, error) {
+	path := filepath.Join(dir, PointerDir, PointerFile)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var p Pointer
+	if err := json.Unmarshal(b, &p); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := schema.Check("lab pointer", p.SchemaVersion, path); err != nil {
+		return nil, err
+	}
+	if p.Name == "" {
+		return nil, fmt.Errorf("%s names no lab", path)
+	}
+	return &p, nil
+}
+
+// All returns every deployment under the labs directory, sorted by name.
+//
+// This is the inventory `sal labs list` reports over, and the reason that
+// command is a control rather than a convenience: one stack per project means
+// labs accumulate, and a forgotten one is not idle — it is a live
+// credential-injecting proxy with the secrets directory mounted.
+//
+// A directory with no compose file is still returned. A half-created or
+// half-deleted deployment is exactly the kind of thing an inventory should
+// show rather than quietly filter out; callers report it with Exists.
+func All() ([]*Lab, error) {
+	root, err := config.LabsDir()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	labs := make([]*Lab, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		labs = append(labs, &Lab{Name: e.Name(), Dir: filepath.Join(root, e.Name())})
+	}
+	sort.Slice(labs, func(i, j int) bool { return labs[i].Name < labs[j].Name })
+	return labs, nil
 }
 
 func forName(name, projectDir string) (*Lab, error) {

@@ -36,9 +36,6 @@ stderr 'not implemented yet'
 ! exec sal observer tail
 stderr 'not implemented yet'
 
-! exec sal labs list
-stderr 'not implemented yet'
-
 ! exec sal labs down
 stderr 'not implemented yet'
 

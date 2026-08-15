@@ -50,6 +50,13 @@ grep 'v1.10.0 addon' $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/010_acme
 grep '"stack_tag": "v1.10.0"' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
 grep '"stack_tag": "v1.10.0"' .sal/lab.json
 
+# An upgrade builds the record from scratch, so anything it does not carry
+# forward is silently dropped. project_dir is the whole lab→project direction —
+# without it `sal labs list` cannot say what a lab is for — and this record had
+# none before the upgrade, so it is written from the project sal actually
+# resolved rather than copied from what was there.
+grep '"project_dir"' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
+
 # And the compose file was re-rendered, or the lab would rebuild from the old
 # release no matter what the record says.
 grep '#v1.10.0:stack/broker' $WORK/.config/secure-agent-lab/labs/demo-lab/compose.yaml

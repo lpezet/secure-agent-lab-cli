@@ -2,6 +2,7 @@ package compose
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -85,6 +86,46 @@ func (r *Runner) ObserverURL(ctx context.Context) (string, error) {
 	// docker prints host:port, and the host half is the loopback address the
 	// compose file bound to.
 	return "http://" + strings.TrimSpace(hostPort), nil
+}
+
+// Project is one compose project as `docker compose ls` reports it.
+type Project struct {
+	Name        string
+	Status      string
+	ConfigFiles string
+}
+
+// Running reports whether any container in the project is up.
+//
+// Status is docker's own summary and looks like "running(6)", or
+// "running(3), exited(3)" for a project that partly came up. A substring match
+// is deliberate over parsing the counts: a lab with one container running is
+// as much a live credential path as one with six, and no other container state
+// docker reports — created, restarting, paused, exited, dead, removing —
+// contains this word.
+func (p Project) Running() bool { return strings.Contains(p.Status, "running") }
+
+// List asks Docker which compose projects it knows about, running or not.
+//
+// One call for the whole machine rather than one per lab: the answer is a
+// property of the daemon, not of any deployment, which is also why it is a
+// package function and not a Runner method.
+func List(ctx context.Context) ([]Project, error) {
+	cmd := exec.CommandContext(ctx, "docker", "compose", "ls", "--all", "--format", "json")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("docker compose ls: %w", err)
+	}
+
+	var projects []Project
+	if err := json.Unmarshal(out, &projects); err != nil {
+		// The caller reports labs from the filesystem and marks their state
+		// unknown. Refusing outright would make an inventory of what exists —
+		// which is true regardless of what docker says — depend on a format
+		// this repo does not own.
+		return nil, fmt.Errorf("docker compose ls returned output this sal cannot read: %w", err)
+	}
+	return projects, nil
 }
 
 func dirOf(file string) string {

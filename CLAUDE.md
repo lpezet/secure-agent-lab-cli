@@ -211,6 +211,35 @@ never heard of `sal` still works on. The project's `.sal/` holds `lab.json` and
 must never hold an `installed.json`: two answers to "what is installed" and
 nothing keeping them equal.
 
+**The link is recorded in both directions, and only one of them is trusted.**
+The project→lab direction is the pointer; the lab→project direction is
+`project_dir` in the install record. It has to be *recorded* because the name
+derives from the project's path through a hash, and a hash cannot be inverted —
+without it an inventory of the labs directory cannot say what any lab is *for*.
+
+The asymmetry is the point. The pointer is what `sal` acts on; `project_dir` is
+a claim made when the lab was created, and `sal labs list` checks it rather
+than reading from it. A project that was deleted, or that no longer points
+back, is exactly the forgotten lab that command exists to surface — and a
+deployment left running is not idle. So the check must not walk up the way
+`lab.Find` does: an ancestor project's pointer would answer for a directory
+that has none, and report a lab nothing points at as healthy. `lab.PointerAt`
+is the non-walking form, and it exists for that one difference.
+
+Note that an upgrade rebuilds the record from scratch, so a field it does not
+carry forward is dropped silently. `project_dir` is written there from the
+project `sal` actually resolved, which also fills it in for a lab created
+before it existed.
+
+**Adding an optional field to `installed.json` is NOT a generation event**,
+which is the opposite of the rule for bank manifests — and the difference is
+one line of code rather than a judgement call. A manifest is decoded with
+`DisallowUnknownFields`, so a new field makes every older `sal` fail to read it
+at all. The install record is decoded plainly, so an older `sal` ignores what it
+does not know and still answers correctly every question it asks. A field that
+changes the meaning of an existing one, or that a reader must honour to stay
+correct, is a generation event wherever it lives.
+
 **Per-provider values never appear in the generated compose.** Every manifest
 declares its own `secrets`, `config` and `lab_env`, so those become entries in
 `.env` (broker and proxy) and `lab.env` (the lab only, so it never receives the
@@ -555,6 +584,17 @@ tell you that `sal observer disable` is not a command. Its `Setup` points `HOME`
 at the script's scratch directory, which is a safety property rather than
 hygiene: a test run that reached the operator's real secrets directory could
 overwrite a live credential.
+
+**Where `sal` reads Docker rather than driving it, fake the `docker` binary.**
+`sal labs list` asks `docker compose ls` which projects exist and which are up.
+Its two findings that matter — a lab that is *running*, and a compose project
+running out of the labs directory that no deployment there accounts for —
+cannot be produced by starting real containers in a test, and the second is not
+a state anything should be able to create on purpose. A `/bin/sh` script first
+on `PATH` makes both deterministic, and exercises the real `exec` path and the
+real JSON decode rather than a seam cut into the production code for testing.
+Note this is the *reading* half only; the warning above still stands for
+anything that starts containers.
 
 **A container is right for the install script, and wrong for the lab.** Testing
 `curl … | bash` across `debian:slim`, `alpine` and `ubuntu`, as root and

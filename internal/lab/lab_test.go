@@ -3,6 +3,7 @@ package lab
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -302,5 +303,93 @@ func TestExistsTracksTheComposeFile(t *testing.T) {
 	}
 	if !l.Exists() {
 		t.Error("Exists() is false with a compose file present")
+	}
+}
+
+// All is the inventory `sal labs list` reports over. Every deviation it can
+// meet is here rather than filtered out, because an inventory that hides the
+// odd ones reports a smaller machine than the operator has — and a lab that
+// does not look like a deployment can still have containers up.
+func TestAllReturnsEveryDirectory(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", root)
+
+	labs := filepath.Join(root, "secure-agent-lab", "labs")
+	for _, name := range []string{"zulu-00000000", "alpha-11111111", "half-created"} {
+		if err := os.MkdirAll(filepath.Join(labs, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A stray file is not a lab, and a compose file is not required to be one:
+	// "half-created" has no compose.yaml and is still reported.
+	if err := os.WriteFile(filepath.Join(labs, "notes.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, l := range got {
+		names = append(names, l.Name)
+		if filepath.Dir(l.Dir) != labs {
+			t.Errorf("%s is at %q, want it under the labs root", l.Name, l.Dir)
+		}
+		// Set only by Find, which learns it by walking up from a directory
+		// that holds the pointer. From this side the project is a claim in the
+		// deployment's record, and the difference is what `sal labs list`
+		// checks.
+		if l.ProjectDir != "" {
+			t.Errorf("%s carries a project dir %q that All cannot know", l.Name, l.ProjectDir)
+		}
+	}
+	want := "alpha-11111111,half-created,zulu-00000000"
+	if strings.Join(names, ",") != want {
+		t.Errorf("All() = %v, want %s in that order", names, want)
+	}
+}
+
+// A machine with no labs directory yet is not an error: `sal labs list` on a
+// fresh install must say "no labs", not fail.
+func TestAllOnAFreshMachine(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	got, err := All()
+	if err != nil {
+		t.Fatalf("All() on a machine with no labs: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("All() = %v, want nothing", got)
+	}
+}
+
+// PointerAt answers a different question from Find, and the difference is the
+// point of it existing: "does THIS directory point at a lab" rather than
+// "which lab does this directory work under". An ancestor's pointer is the
+// right answer to the second and a wrong answer to the first — it would report
+// a lab nothing points at as healthy.
+func TestPointerAtDoesNotWalkUp(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	project := t.TempDir()
+	writePointer(t, project, `{"schema_version": 1, "name": "demo-lab", "stack_tag": "v1.9.0"}`)
+
+	p, err := PointerAt(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Name != "demo-lab" {
+		t.Errorf("name = %q", p.Name)
+	}
+
+	inner := filepath.Join(project, "src")
+	if err := os.MkdirAll(inner, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Reported as fs.ErrNotExist specifically, so a caller can tell a missing
+	// pointer from a malformed one.
+	if _, err := PointerAt(inner); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("PointerAt(%q) = %v, want fs.ErrNotExist", inner, err)
 	}
 }
