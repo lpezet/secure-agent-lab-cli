@@ -466,12 +466,33 @@ func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
 		if err != nil {
 			return err
 		}
-		// A tag can move, so the commit is what says whether this is actually
-		// a change. Same tag with a different commit IS an upgrade.
-		if to == rec.StackTag && toCommit == rec.StackCommit {
-			fmt.Fprintf(errOut, "lab %s is already at %s (%s); nothing to do\n", l.Name, to, shortCommit(toCommit))
-			return nil
-		}
+	}
+
+	// Same pin, and it still runs.
+	//
+	// This used to return here — "already at v1.12.0; nothing to do" — which is
+	// the exact assumption this repo exists to refute: the pin is NOT what
+	// determines the files. They are bind-mounted copies, so a lab can be
+	// pinned to a release and not be running what that release ships, which is
+	// the whole reason `sal drift` exists.
+	//
+	// It was also a promise broken in one hop. `sal drift` reports a tampered
+	// addon and says "DRIFT and MISSING are what `sal upgrade` rewrites" — and
+	// upgrade then declined, so the one command named as the remedy did
+	// nothing about the finding. An agent editing a proxy addon is precisely
+	// what drift is for, and the repair has to work. A remedy a lab can be too
+	// up-to-date to receive is not a remedy.
+	//
+	// Deliberately OUTSIDE the resolution branch above. It lived inside it,
+	// where --stack-dir skips it entirely — so the two paths did different
+	// things and no test could reach the one that returned early, which is how
+	// this survived. Both now take the same decision, and there is one place
+	// where an early return could ever be re-added.
+	//
+	// Applying costs a fetch and some file writes; not work worth skipping.
+	if to == rec.StackTag && (toCommit == "" || toCommit == rec.StackCommit) {
+		fmt.Fprintf(errOut, "lab %s is already pinned to %s, so this reinstalls every file it ships\n"+
+			"rather than moving the pin.\n", l.Name, to)
 	}
 
 	b, tree, err := openBank(cmd, toCommit)
