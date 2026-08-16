@@ -3,6 +3,13 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # A rehearsal, runnable at any time: everything a real release does except
+  # publishing. `make snapshot` covers the build locally, but it cannot cover
+  # the half that only exists here — fetching a pinned cosign, and having an
+  # OIDC token to sign with. That half is what broke the first v0.2.0 tag, and
+  # a tag is a bad place to discover it: the tag is already public, and undoing
+  # one means deleting it.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -21,17 +28,37 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # Pinned to a major version rather than floating: the signing flags in
-      # .goreleaser.yaml and the verify flags in install.sh are v3's, and v2
-      # can neither produce nor read the bundle they use. A silent jump across
-      # that line breaks releases at the one moment nobody is watching.
-      - uses: sigstore/cosign-installer@v3
+      # TWO versions here, and they are not the same version. cosign-release is
+      # the cosign BINARY that signs our checksums; the action's own major is
+      # the installer that fetches and verifies that binary. Both are pinned,
+      # because the signing flags in .goreleaser.yaml and the verify flags in
+      # install.sh are cosign v3's and v2 can neither produce nor read the
+      # bundle they use.
+      #
+      # The action major has to move WITH cosign's format, which is what caught
+      # the first v0.2.0 tag. cosign v3 stopped publishing a detached
+      # `cosign-linux-amd64.sig` beside its binaries and publishes
+      # `cosign-linux-amd64.sigstore.json` instead — the same removal that broke
+      # our own signing. The v3 installer verifies with `--signature <file>.sig`,
+      # so asking it for a v3 cosign is asking it to download an asset that no
+      # longer exists: it fails on a 404 in 13 seconds, before goreleaser runs
+      # at all. v4 branches on the release and verifies with `--bundle`.
+      #
+      # So: bumping cosign-release across a format boundary means checking the
+      # installer too. The failure is loud and lands at the one moment nobody is
+      # watching, which is exactly when a release is being cut.
+      - uses: sigstore/cosign-installer@v4
         with:
           cosign-release: "v3.1.3"
 
+      # On a tag, a real release. On a manual run, the same pipeline with
+      # nothing published — so a rehearsal cannot create a release, and forgetting
+      # which one you started is not a way to publish something.
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean
+          args: >-
+            release --clean
+            ${{ github.event_name == 'workflow_dispatch' && '--snapshot --skip=publish' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
