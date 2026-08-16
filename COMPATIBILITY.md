@@ -158,7 +158,10 @@ oldest release that happened to be marked stable, which is the opposite of what
 "latest" means to whoever typed it. Two individually correct decisions —
 publish 0.x as pre-releases, resolve "latest" from the endpoint named latest —
 combining into a script that installed the wrong artifact. `install.sh` now
-falls back to the newest release of any kind and says so.
+asks the stable endpoint first and falls back to the newest release of any
+kind. Both calls stay after 1.0, in the other direction: `/releases` is
+newest-first, so asking only it would hand someone a `v1.1.0-rc1` sitting above
+`v1.0.0`.
 
 **The tag parser took the last quoted string on the line.** A list response can
 arrive on one line, where `s/.*"([^"]+)".*/\1/` is greedy and captures
