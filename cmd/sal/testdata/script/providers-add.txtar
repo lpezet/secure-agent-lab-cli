@@ -18,7 +18,19 @@ stdout 'write\s+proxy/010_acme\.py'
 stdout 'write\s+cred-gateway/acme\.conf'
 stdout 'route\s+/acme/token — not exposed to the lab'
 stdout 'route\s+/acme/credential — whitelisted for the lab'
+
+# Egress is part of the PLAN, not an afterthought. It is the one line in an
+# install that widens the boundary, so a dry run that showed the files and not
+# the destinations would describe the wrong half of the change.
+stdout 'allow\s+api\.acme\.example        GET,POST'
+stdout 'allow\s+uploads\.acme\.example    POST'
+
+# And the commented one is never granted, in the plan or anywhere else. That
+# rule is what makes seeding safe to do by default.
+! stdout 'allow\s+telemetry'
+
 stderr 'nothing was written'
+! exists $WORK/.config/secure-agent-lab/labs/demo-lab/allowlist
 
 # A dry run writes nothing, including the record.
 grep '"installed": \[\]' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
@@ -99,6 +111,19 @@ name: stocked-lab
 module.exports = function register(app) {};
 -- stack/bank/acme/proxy/acme.py --
 HOSTS = ("api.acme.example", "uploads.acme.example")
+-- stack/bank/acme/allowlist --
+# Acme — egress this entry needs.
+#
+# METHODS is not optional in practice: a line with none defaults to
+# GET,HEAD,OPTIONS, which reads as correct and blocks every POST.
+
+api.acme.example        GET,POST
+uploads.acme.example    POST
+
+# ---------------------------------------------------------------------------
+# OPTIONAL — nothing below is needed for the provider to work.
+# ---------------------------------------------------------------------------
+# telemetry.acme.example  POST    # usage reporting
 -- stack/bank/acme/cred-gateway/acme.conf --
 location = /acme/credential { proxy_pass http://broker:8080; }
 -- stack/bank/leaky/provider.json --

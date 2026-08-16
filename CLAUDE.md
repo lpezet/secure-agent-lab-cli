@@ -504,6 +504,33 @@ the cred-gateway config — left behind it keeps whitelisting a route whose
 broker provider is gone, which is the same widened boundary `upgrade`'s stale
 deletion exists to prevent and `drift` reports as STALE.
 
+**An entry's egress is SEEDED, and only what it left uncommented.** From stack
+1.13.0 a bank entry ships `allowlist` — the destinations it needs, in the
+allowlist's own syntax, with anything optional commented out. `providers add`
+writes the uncommented lines into the deployment's allowlist and prints them;
+`providers remove` takes them back out; `upgrade` rewrites them from the new
+release, so a host an entry stopped needing stops being permitted.
+
+Seeding at all is a departure from "the allowlist is the operator's", and it
+earns it on one specific ground: the entry's broker provider and proxy addon
+already run behind the credential boundary, so installing it has already
+extended more trust than *you may reach the host you say you need*. Refusing to
+seed produced the failure this replaces — a provider that installs cleanly and
+has every request denied. Deriving it from `hosts` instead is not an option and
+not only because `hosts` is a different list: it carries no methods, and a line
+with none defaults to `GET,HEAD,OPTIONS`, which reads as configured and blocks
+every POST.
+
+What keeps it safe is the line it does not cross. **A commented destination is
+never written** — that is the vendor's suggestion, not the entry's requirement,
+and turning it on is the operator's to type. And what sal writes lives in a
+marked block, so everything outside every block belongs to the operator and is
+never touched. Without the block, removal would have to choose between leaving
+a destination permitted after its provider is gone and deleting a line somebody
+wrote by hand — the same asymmetry `providers remove` already follows for
+files, applied to the one control where a leftover is a widened boundary rather
+than a stale file.
+
 **Removing a provider never deletes a credential.** Reinstalling the provider
 undoes the removal; deleting a credential undoes nothing, and the two are
 different decisions. The paths are printed so `rm` is one line away for someone

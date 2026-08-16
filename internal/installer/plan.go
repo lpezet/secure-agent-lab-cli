@@ -20,6 +20,7 @@ import (
 
 	"github.com/lpezet/secure-agent-lab-cli/internal/bank"
 	"github.com/lpezet/secure-agent-lab-cli/internal/deployment"
+	"github.com/lpezet/secure-agent-lab-cli/internal/egress"
 	"github.com/lpezet/secure-agent-lab-cli/internal/manifest"
 )
 
@@ -31,6 +32,11 @@ const (
 	gatewayDir = "cred-gateway"
 	labDir     = "lab"
 )
+
+// egressFile is the entry's own allowlist, from stack 1.13.0. Not one of the
+// four above: those are copied into the deployment as files, and this one is
+// MERGED into a file the operator also writes in.
+const egressFile = "allowlist"
 
 // File is one file to copy, resolved on both sides.
 type File struct {
@@ -60,6 +66,19 @@ type Plan struct {
 	// LabEnv is the manifest's lab_env verbatim: literals for the lab
 	// container, and never a credential.
 	LabEnv map[string]string
+
+	// Egress is what the entry says it needs to reach, from its own
+	// `allowlist` file (stack 1.13.0 and newer). Empty for an entry that
+	// ships none, which is every entry at an older release — and the
+	// deployment then behaves exactly as it did before.
+	//
+	// Not derived from Manifest.Hosts, which is a different list: `hosts` is
+	// where the addon ATTACHES a credential, this is where the lab MAY send a
+	// request. github.com belongs in the second and must never be in the
+	// first. Seeding from `hosts` would also lose the methods, and a line with
+	// none defaults to GET,HEAD,OPTIONS — which reads as configured and blocks
+	// every POST.
+	Egress egress.Entry
 }
 
 // ErrAlreadyInstalled is returned when the entry is already recorded.
@@ -182,6 +201,10 @@ func assemble(m *manifest.Manifest, entryDir string, slot int) (*Plan, error) {
 	}
 	if len(p.Files) == 0 {
 		return nil, fmt.Errorf("bank entry %q carries no installable files", m.Name)
+	}
+
+	if body, err := os.ReadFile(filepath.Join(entryDir, egressFile)); err == nil {
+		p.Egress = egress.Parse(body)
 	}
 
 	for _, s := range m.Secrets {

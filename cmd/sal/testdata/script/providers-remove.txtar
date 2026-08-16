@@ -31,13 +31,28 @@ stdout 'delete   lab/acme\.sh'
 # same rule that stops sal choosing a credential's destination.
 stdout 'unset    ACME_APP_ID'
 stdout 'unset    ACME_PRIVATE_KEY_PATH'
+
+# Closing the egress is part of what removal MEANS, so the dry run names it
+# alongside the files. A destination left permitted after its provider is gone
+# is the same widened boundary a stale cred-gateway config is, one control over.
+stdout 'revoke   api\.acme\.example        GET,POST'
+
 stderr 'nothing was removed'
+grep 'api.acme.example' $WORK/.config/secure-agent-lab/labs/demo-lab/allowlist
 exists $WORK/.config/secure-agent-lab/labs/demo-lab/cred-gateway/acme.conf
 grep '"name": "acme"' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
 
 # Now for real.
 exec sal providers remove acme --stack-dir $FIXTURES/local-stack
 stderr 'removed acme from demo-lab'
+stdout 'revoked  api\.acme\.example        GET,POST'
+
+# The grant is closed...
+! grep 'api.acme.example' $WORK/.config/secure-agent-lab/labs/demo-lab/allowlist
+
+# ...and the operator's own line is untouched, which is the whole reason the
+# grant lives in a marked block rather than being appended loose.
+grep 'internal.example.com    GET' $WORK/.config/secure-agent-lab/labs/demo-lab/allowlist
 
 # THE file. Everything else this deletes is inert once the broker provider is
 # gone; this one is a whitelist entry.
@@ -106,6 +121,13 @@ stderr 'still in \.env'
 -----BEGIN PRIVATE KEY-----
 not a real one
 -----END PRIVATE KEY-----
+-- .config/secure-agent-lab/labs/demo-lab/allowlist --
+# My own policy. Nothing below the marker is sal's.
+internal.example.com    GET
+
+# --- sal:acme --- managed; `sal providers remove acme` removes it
+api.acme.example        GET,POST
+# --- end sal:acme ---
 -- .config/secure-agent-lab/labs/demo-lab/compose.yaml --
 name: demo-lab
 -- .config/secure-agent-lab/labs/demo-lab/.sal/installed.json --

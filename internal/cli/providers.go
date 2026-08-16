@@ -167,7 +167,7 @@ func shortCommit(sha string) string {
 }
 
 func newProvidersAddCmd() *cobra.Command {
-	var dryRun bool
+	var dryRun, noEgress bool
 	cmd := &cobra.Command{
 		Use:   "add NAME",
 		Short: "Install a bank entry into this lab",
@@ -185,17 +185,23 @@ func newProvidersAddCmd() *cobra.Command {
 			"     permissions, different prompt. A secret is a 0600 file under the secrets\n" +
 			"     directory; config is a value in .env.\n\n" +
 			"A route the manifest marks `exposed: false` must not appear in any generated\n" +
-			"gateway config. Exposing a token route would hand the lab a reusable secret.",
+			"gateway config. Exposing a token route would hand the lab a reusable secret.\n\n" +
+			"From stack 1.13.0 an entry also declares the egress it needs, and the lines it\n" +
+			"left uncommented are added to this lab's allowlist and printed. Only those: a\n" +
+			"commented line is a suggestion, and turning it on is yours to type. --no-egress\n" +
+			"installs the credential path and grants nothing, for staging one before the\n" +
+			"other.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runProvidersAdd(cmd, args[0], dryRun)
+			return runProvidersAdd(cmd, args[0], dryRun, noEgress)
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "run every check and print what would be written, without writing it")
+	cmd.Flags().BoolVar(&noEgress, "no-egress", false, "install the credential path without permitting the entry's destinations")
 	return cmd
 }
 
-func runProvidersAdd(cmd *cobra.Command, name string, dryRun bool) error {
+func runProvidersAdd(cmd *cobra.Command, name string, dryRun, noEgress bool) error {
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 
 	l, _, err := lab.Find(cwd())
@@ -263,6 +269,13 @@ func runProvidersAdd(cmd *cobra.Command, name string, dryRun bool) error {
 		}
 		fmt.Fprintf(out, "route    %s — %s\n", r.Path, state)
 	}
+	// Egress is reported with the rest of the plan rather than after the fact,
+	// because it is the one line here that WIDENS the boundary — a --dry-run
+	// that showed everything except what it would permit would be describing
+	// the wrong half.
+	for _, l := range plan.Egress.Enabled {
+		fmt.Fprintf(out, "allow    %s\n", l.Text)
+	}
 
 	if dryRun {
 		fmt.Fprintf(errOut, "\ndry run: every check passed and nothing was written\n")
@@ -289,6 +302,16 @@ func runProvidersAdd(cmd *cobra.Command, name string, dryRun bool) error {
 	}
 
 	fmt.Fprintf(errOut, "\ninstalled %s into %s\n", entry.Name, l.Name)
+
+	// Seeding the allowlist widens egress, so what was granted is stated here
+	// rather than left to be discovered. It is done AFTER the record is saved:
+	// the entry owning a block is what lets `providers remove` close the grant
+	// again, so a block written for an entry no record names would be a
+	// permission nothing knows how to take back.
+	if err := seedEgress(cmd, l.Dir, entry.Name, plan.Egress, noEgress); err != nil {
+		return err
+	}
+
 	fmt.Fprintf(errOut, "Run `sal up` to restart the lab against it — the broker, proxy and\n"+
 		"cred-gateway read these files at startup, so a running lab has not picked them up.\n")
 
@@ -561,6 +584,13 @@ func runProvidersRemove(cmd *cobra.Command, name string, dryRun bool) error {
 		}
 	}
 
+	// Reported with the files, because closing egress is part of what removal
+	// means — and a --dry-run that listed the files without it would describe
+	// a smaller change than the one about to happen.
+	if err := dropEgress(cmd, l.Dir, entry.Name, true); err != nil {
+		return err
+	}
+
 	if dryRun {
 		fmt.Fprintf(errOut, "\ndry run: nothing was removed\n")
 		return nil
@@ -580,6 +610,15 @@ func runProvidersRemove(cmd *cobra.Command, name string, dryRun bool) error {
 		if err := envfile.Remove(filepath.Join(l.Dir, labEnvFileName), sortedKeys(m.LabEnv)); err != nil {
 			return err
 		}
+	}
+
+	// Before the record is saved, which is the reverse of the install order
+	// and points the same way: the state that must not be reachable is a
+	// deployment whose record no longer names the entry while its destinations
+	// are still permitted. Nothing would report that grant, because nothing
+	// would know to look for it.
+	if err := dropEgress(cmd, l.Dir, entry.Name, false); err != nil {
+		return err
 	}
 
 	rec.Installed = rest
