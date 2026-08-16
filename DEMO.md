@@ -16,7 +16,8 @@ to `docker compose`.
 
 > **What is verified and what is not.** Steps 1–4, 9, and the dry runs in 11
 > and 12 were run end to end while writing this, against stack v1.12.0, and
-> their output below is real. The steps that start containers — 6, 7, 8, 10,
+> their output below is real — steps 0, 1, 2 and 9 with the published `v0.1.0`
+> binary rather than a local build. The steps that start containers — 6, 7, 8, 10,
 > 13 — are exercised by the test suite against a fake `docker`, and the
 > generated `compose.yaml` is validated by real compose, but that half of the
 > sequence has not yet been run against real containers. Expect the sense to be
@@ -42,12 +43,20 @@ sal --version
 ```
 
 ```
-sal          v0.1.0
+sal          0.1.0 (8bfda02f705f)
 stack        unknown — this directory has no lab
 ```
 
 Two versions, always. `sal` and the stack are tagged on separate lines: a
 single number could not answer "how far behind is my security boundary?".
+
+The installer says `no stable release yet — installing pre-release v0.1.0` on
+the way past, and means it. Every 0.x release is published as a pre-release
+deliberately, because the design is still settling.
+
+(A binary from `make build` reports `v0.1.0-3-g8bfda02` instead — `git
+describe` keeps the `v` and the commit distance, GoReleaser strips both. Same
+build, different provenance.)
 
 ---
 
