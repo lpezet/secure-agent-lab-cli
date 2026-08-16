@@ -479,17 +479,41 @@ cannot be told apart afterwards, they are not equivalent (one was reviewed by
 whoever maintains the bank and one was not), and `sal drift` compares each
 against a different tree.
 
-⚠️ **`internal/scaffold` is a copy of the STACK's API, living here
-temporarily** — the same status as the compose template, and for the same
-reason. mitmproxy's hook signature, the broker's `require("../audit")` and
-nginx's location syntax are the image's API, which this repo does not version,
-so a skeleton here does not move when a deployment repins. It is here because
-the stack repo has no template to fetch yet; the intended end state is
-`bank/_template/` over there, fetched at the pinned tag exactly like a bank
-entry, at which point `internal/scaffold` is DELETED rather than ported. Keep
-it in one file and keep it dumb. While it lives here, an addon-API change needs
-a `sal` release, and a scaffold from an old `sal` may not match the release a
-lab is pinned to.
+**The provider skeleton is FETCHED too, and `internal/scaffold` is gone.** It
+was a copy of the stack's API living here — mitmproxy's hook signature, the
+broker's `require("../audit")`, nginx's location syntax — with the same status
+as the compose template and the same problem: that is the image's API, which
+this repo does not version, so a skeleton here did not move when a deployment
+repinned. An addon-API change needed a `sal` release, and a scaffold from an
+old `sal` could not match the release a lab was pinned to.
+
+Stack 1.12.0 ships `template/provider/<shape>/`, and `providers create` fetches
+it at the pinned commit exactly like a bank entry — so what somebody scaffolds
+is what that release runs, and the stack's own lint checks the skeleton as if
+it were a real entry. The package was DELETED rather than ported, as intended.
+
+**The placeholder is read from the skeleton's own `provider.json` `name`, never
+hardcoded.** The token is the stack's to choose: it was proposed as
+`__PROVIDER__` and shipped as `acme`, and a `sal` with either baked in renders
+a broken entry the day the other is used — silently, because the result is
+still valid JSON and valid Python. Reading it back makes a change over there a
+change to data here. The fixture skeleton in `tests/fixtures/` spells it
+differently from upstream on purpose, so a hardcoded token fails the suite.
+
+Two case forms are substituted and only two. `acme` names files, routes and
+hosts; `ACME_TOKEN_PATH` is an environment variable, and left behind it gives
+an entry whose broker reads a variable the manifest never declares — installs
+fine, finds no credential, says nothing. Title case is deliberately NOT a third:
+Go treats `_` as a word character, so `strings.Title("__provider__")` returns
+the token unchanged and the branch renamed the entry to `Telegraph`. A skeleton
+that spells its placeholder in prose keeps the spelling, which is cosmetic;
+renaming an entry to a name it does not have is not.
+
+And the word `provider` never moves — `provider.json` is a fixed filename,
+`"load_band": "provider"` is a schema enum value, and `provider=` is the audit
+trail's field **name** rather than its contents. That falls out of substituting
+only the placeholder, and is asserted anyway, because a blanket rename of the
+word corrupted all four once.
 
 **There is no `--template` flag yet.** A flag with one legal value is a promise
 about a naming scheme nobody has designed. Templates arrive when shapes emerge

@@ -19,8 +19,9 @@ import (
 	"github.com/lpezet/secure-agent-lab-cli/internal/lab"
 	"github.com/lpezet/secure-agent-lab-cli/internal/manifest"
 	"github.com/lpezet/secure-agent-lab-cli/internal/prompt"
-	"github.com/lpezet/secure-agent-lab-cli/internal/scaffold"
 	"github.com/lpezet/secure-agent-lab-cli/internal/secrets"
+	"github.com/lpezet/secure-agent-lab-cli/internal/skeleton"
+	"github.com/lpezet/secure-agent-lab-cli/internal/version"
 )
 
 // newProvidersCmd builds the `sal providers` group.
@@ -402,8 +403,8 @@ func newProvidersCreateCmd() *cobra.Command {
 			"The layout is the bank's own, so what you write here can be proposed to the\n" +
 			"bank unchanged — and sal reads it with the same code that reads the bank.\n\n" +
 			"There is no --template yet. A flag with one legal value is a promise about a\n" +
-			"naming scheme nobody has designed; templates will arrive as shapes emerge from\n" +
-			"actually writing providers.\n\n" +
+			"naming scheme nobody has designed; shapes arrive as data in the stack repo, and\n" +
+			"one exists today.\n\n" +
 			"Note the boundary: the generation constraints for writing a provider from\n" +
 			"scratch live in the stack repo's PLAYBOOK.md, which covers exactly the case a\n" +
 			"bank of finished entries cannot. This command scaffolds; it does not replace\n" +
@@ -434,9 +435,22 @@ func runProvidersCreate(cmd *cobra.Command, name string) error {
 			"or `sal providers add %s` if that entry is the one you wanted", where, name, name)
 	}
 
-	files, err := scaffold.Write(dir, name)
+	// Fetched at the release this project is pinned to, never carried here.
+	// The addon API is the image's and this repo does not version it, so a
+	// skeleton kept in sal would not move when a deployment repinned.
+	tag, commit, err := scaffoldSource(cmd)
 	if err != nil {
-		var exists *scaffold.ErrExists
+		return err
+	}
+	tree, err := bank.FetchTree(cmd.Context(), commit, skeleton.Subtree, bankOptions(cmd))
+	if err != nil {
+		return fmt.Errorf("cannot obtain the provider skeleton at %s: %w", tag, err)
+	}
+	defer tree.Close()
+
+	files, err := skeleton.Write(filepath.Join(tree.Dir, skeleton.Shape), dir, name)
+	if err != nil {
+		var exists *skeleton.ErrExists
 		if errors.As(err, &exists) {
 			return fmt.Errorf("%s already exists; delete it or pick another name rather than "+
 				"having sal write over work you may have done there", exists.Dir)
@@ -457,6 +471,9 @@ func runProvidersCreate(cmd *cobra.Command, name string) error {
 		"Read PLAYBOOK.md in the stack repo — it covers writing one from scratch, which\n"+
 		"is what you are about to do. Then `sal providers add %s --dry-run` runs every\n"+
 		"check sal has against it without writing anything.\n", manifest.Filename, name)
+	fmt.Fprintf(errOut, "\nThe %s shape at stack %s. It ships no allowlist, so nothing is permitted\n"+
+		"for it until you add one — see any bank entry's own `allowlist` for the shape.\n",
+		skeleton.Shape, tag)
 	return nil
 }
 
@@ -788,4 +805,41 @@ func reportKeptSecrets(cmd *cobra.Command, m *manifest.Manifest) {
 	for _, k := range kept {
 		fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", k)
 	}
+}
+
+// scaffoldSource picks the release to take the skeleton from.
+//
+// A lab's pin when there is one, because the skeleton mirrors the addon API of
+// a specific release and the entry is going to be installed into THAT lab —
+// scaffolding against a newer API than the deployment runs produces a provider
+// that installs cleanly and fails inside the container.
+//
+// Without a lab it falls back to the newest release this build knows about,
+// which is the same answer `init` would give: somebody writing a provider
+// before creating a lab is a reasonable order to work in, and refusing it
+// would make this the one command that needs a deployment to scaffold a file.
+func scaffoldSource(cmd *cobra.Command) (tag, commit string, err error) {
+	tag = version.DefaultStack
+
+	if l, _, ferr := lab.Find(cwd()); ferr == nil && l.Exists() {
+		if rec, rerr := deployment.Load(l.Dir); rerr == nil && rec.StackTag != "" {
+			tag = rec.StackTag
+			if rec.StackCommit != "" {
+				// The recorded commit, for the reason every other command
+				// uses it: a tag can move, and a skeleton fetched from a
+				// moved tag is not the one this deployment runs.
+				return tag, rec.StackCommit, nil
+			}
+		}
+	}
+
+	if !version.StackHasUsableTemplate(tag) {
+		return "", "", fmt.Errorf("stack %s ships no provider skeleton for sal to fetch; "+
+			"it arrives in v%s", tag, version.TemplateFrom)
+	}
+	if stackDir(cmd) != "" {
+		return tag, "", nil
+	}
+	commit, err = bank.DefaultSource().ResolveTag(cmd.Context(), tag)
+	return tag, commit, err
 }
