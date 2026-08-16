@@ -150,11 +150,12 @@ hosts    api.anthropic.com
 write    broker/anthropic.js
 write    proxy/010_anthropic.py
 route    /anthropic/cred — not exposed to the lab
+allow    api.anthropic.com       GET,POST
 
 dry run: every check passed and nothing was written
 ```
 
-Three things in that output are worth reading rather than skimming:
+Four things in that output are worth reading rather than skimming:
 
 - **`slot 010`** is the addon's filename prefix, and the prefix is its load
   order. The bank never bakes a number in; `sal` assigns the lowest free slot
@@ -165,6 +166,9 @@ Three things in that output are worth reading rather than skimming:
   route. `/anthropic/cred` hands over a reusable secret, so the lab must never
   reach it — the proxy injects it into requests instead. An entry whose
   manifest marked it exposed would be refused.
+- **`allow`** is the one line here that WIDENS the boundary, which is why it is
+  in the plan rather than mentioned afterwards. The entry ships its own
+  `allowlist` and this is what it needs to function; see step 6.
 
 Then, for real:
 
@@ -185,6 +189,13 @@ Anthropic API key (used only if no OAuth token is set)
 skipped anthropic.key (optional)
 
 installed anthropic into my-agent-project-082ce7bb
+
+egress   permitted 1 destination(s) in <lab>/allowlist:
+           api.anthropic.com       GET,POST
+         2 more the entry offers and did NOT enable:
+           statsig.anthropic.com   POST           (feature flags; the client works without it)
+           sentry.io               POST           (error reporting)
+         Uncomment them there if you want them.
 Run `sal up` to restart the lab against it — the broker, proxy and
 cred-gateway read these files at startup, so a running lab has not picked them up.
 ```
@@ -314,30 +325,49 @@ Claude Code misbehaves as a detached container entrypoint.
 
 ---
 
-## 6. Open the egress allowlist
+## 6. Check the egress allowlist
 
-The lab starts able to reach **nothing**. That is the right default and a
-surprising one, so `init` says so — but it is still the step people forget.
+A new lab can reach **nothing**, and step 3 has already opened the one door
+Claude Code needs — the `anthropic` entry ships the destinations it requires
+and `providers add` wrote them in:
 
 ```bash
-$EDITOR ~/.config/secure-agent-lab/labs/my-agent-project-082ce7bb/allowlist
+cat ~/.config/secure-agent-lab/labs/my-agent-project-082ce7bb/allowlist
 ```
 
-One entry per line, `domain [METHODS]`. For Claude Code, one line is enough:
-
 ```
-api.anthropic.com       POST
+# --- sal:anthropic --- managed; `sal providers remove anthropic` removes it
+api.anthropic.com       GET,POST
+# --- end sal:anthropic ---
 ```
 
-That is the only host the `anthropic` entry declares, and the addon matches
-exactly it — the proxy injects your credential into requests going there and
-nowhere else. Add what else your agent needs; a repo-working agent usually
-wants GitHub too:
+**Only what the entry left uncommented.** Its own file also suggests
+`statsig.anthropic.com` and `sentry.io`, commented out, and those stay denied
+until you type them — a vendor's suggestion is not an entry's requirement. That
+line is what makes seeding safe to do by default.
+
+Everything **outside** the marked block is yours and is never touched, which is
+how you add what else your agent needs. A repo-working agent usually wants
+GitHub:
 
 ```
 api.github.com          GET,POST,PATCH,PUT,DELETE
 github.com              *
 ```
+
+Worth knowing why this cannot be derived from the manifest's `hosts`. That
+field carries no methods, and an entry with none defaults to
+`GET,HEAD,OPTIONS` — safe reads only. So the obvious guess
+
+```
+api.anthropic.com
+```
+
+is syntactically fine, reads as correct, and blocks every request Claude Code
+makes, all of which are POSTs. It fails like a bad credential. `hosts` is also
+a different list: it is where the proxy *attaches* your credential, not where
+the lab *may send* a request — `github.com` belongs in the second and must
+never be in the first.
 
 Matching is on label boundaries: `*.example.com` covers `a.example.com` and
 `a.b.example.com`, never `example.com` itself and never `evilexample.com`.
@@ -345,13 +375,12 @@ METHODS defaults to `GET,HEAD,OPTIONS` — safe reads only. **The file being
 present is what makes the allowlist enforcing**; deleting it permits every
 destination, with a warning at startup.
 
-Expect `blocked` lines in the trail even when everything works. Claude Code
-also reaches telemetry and error-reporting hosts, which are not on the
-allowlist and should not be — they are denied, and the denials are recorded.
-That is the boundary doing its job, not a misconfiguration. To quiet them, add
-`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` to the lab's `lab.env`; a key you
-add there by hand survives `providers add` and `upgrade`, which only touch the
-ones a manifest names.
+Expect `blocked` lines in the trail even when everything works — they are the
+two the entry offered and `sal` declined. That is the boundary doing its job,
+not a misconfiguration. To quiet them at the source rather than permitting
+them, add `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` to the lab's `lab.env`;
+a key you add there by hand survives `providers add` and `upgrade`, which only
+touch the ones a manifest names.
 
 ---
 
@@ -740,7 +769,7 @@ sal providers list --available            # what the bank offers at this pin
 sal providers add anthropic               # install the credential path
 sal secrets set anthropic                 # store the credential, echo off
 $EDITOR <lab>/lab/Dockerfile              # add Claude Code — the image is yours
-$EDITOR <lab>/allowlist                   # api.anthropic.com POST; egress starts closed
+cat <lab>/allowlist                       # what step 3 permitted; add your own here
 sal up --build                            # six services
 sal observer open                         # the audit trail, in a second window
 sal open claude                           # THE POINT: Claude, behind the boundary
