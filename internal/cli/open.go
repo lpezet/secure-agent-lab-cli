@@ -62,16 +62,25 @@ func runOpen(cmd *cobra.Command, args []string) error {
 
 // command is what to run inside the lab.
 //
-// The default tries bash and falls back to sh in one invocation rather than
-// sal probing first. Which shells a lab image has is the image's business —
-// the stack's own is Debian-based, but a lab_setup fragment or a hand-written
+// The default falls back from bash to sh inside the container rather than sal
+// probing first. Which shells a lab image has is the image's business — the
+// stack's own is Debian-based, but a lab_setup fragment or a hand-written
 // lab/Dockerfile can make it anything, and sal holding an opinion about that
 // would be wrong the moment someone changes their base image.
+//
+// The probe is `command -v`, and the redirect belongs to the PROBE — never to
+// bash itself. This was `exec bash 2>/dev/null || exec sh`, which silenced a
+// "not found" message and, in doing so, handed the operator a shell with no
+// prompt: bash decides it is interactive by testing that stdin AND STDERR are
+// terminals, so `2>/dev/null` starts it non-interactive. A non-interactive
+// bash still reads and runs what is typed, which is why it looks like a
+// working shell — with no prompt, no readline, no history and no job control,
+// and no clue as to why. Redirecting bash's stderr here is never right.
 func command(args []string) []string {
 	if len(args) > 0 {
 		return args
 	}
-	return []string{"sh", "-c", "exec bash 2>/dev/null || exec sh"}
+	return []string{"sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh"}
 }
 
 // serviceRunning reports whether the lab service has a container up.

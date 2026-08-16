@@ -33,10 +33,18 @@ env FAKE_DOCKER_RUNNING=lab
 exec sal open
 grep '^exec ' $WORK/calls.log
 
-# With no arguments it asks for a shell, trying bash and falling back to sh in
-# one invocation. Which shells a lab image has is the image's business — a
+# With no arguments it asks for a shell, falling back from bash to sh inside
+# the container. Which shells a lab image has is the image's business — a
 # lab_setup fragment or a hand-written lab/Dockerfile can make it anything.
-stdout 'exec bash 2>/dev/null \|\| exec sh'
+stdout 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'
+
+# And the redirect belongs to the PROBE, never to bash. bash decides it is
+# interactive by testing that stdin AND stderr are terminals, so `exec bash
+# 2>/dev/null` — which is what this used to be — starts a shell with no
+# prompt, no readline and no job control, that still runs what is typed. It
+# looks like a working shell and gives no clue why it is not.
+! stdout 'exec bash 2>'
+! stdout 'exec bash [0-9]*>'
 
 # With arguments it runs those instead, and flags after the command belong to
 # the command rather than to sal.
