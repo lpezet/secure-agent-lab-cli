@@ -219,10 +219,22 @@ FAKE_NO_STABLE=1 FAKE_PRERELEASE=v1.2.3 run "$target"
 check "falls back to the newest pre-release when no release is stable" \
 	"$([ -x "$target/sal" ] && echo 0 || echo 1)"
 
-# And says so. Installing a pre-release without a word is how someone comes to
-# believe the design is settled when the release page says it is not.
-check "says the version it fell back to is a pre-release" \
-	"$(said 'no stable release yet' && echo 0 || echo 1)"
+# It names the version either way, which is why which endpoint answered needs
+# no message of its own.
+check "names the version it resolved" \
+	"$(said 'downloading sal v1.2.3' && echo 0 || echo 1)"
+
+# THE assertion that has to survive 1.0, and the reason this cannot collapse to
+# one call on /releases. That endpoint lists every release newest-first, so a
+# `v9.9.9` pre-release sitting above the stable one would become "latest" —
+# which is not what anyone typing it means. The stable endpoint is asked first
+# and its answer wins.
+target="$work/latest-stable-wins"
+FAKE_LATEST=v1.2.3 FAKE_PRERELEASE=v9.9.9 run "$target"
+check "prefers the stable release over a newer pre-release" \
+	"$([ -x "$target/sal" ] && echo 0 || echo 1)"
+check "never reaches for the newer pre-release" \
+	"$(said 'v9.9.9' && echo 1 || echo 0)"
 
 # Neither endpoint answering is a different thing from either one being empty,
 # and it must not proceed to construct an asset URL from an empty version.

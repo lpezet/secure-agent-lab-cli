@@ -28,10 +28,11 @@ curl -fsSL https://raw.githubusercontent.com/lpezet/secure-agent-lab-cli/main/in
 curl -fsSL https://raw.githubusercontent.com/lpezet/secure-agent-lab-cli/main/install.sh | bash -s v0.1.0
 ```
 
-With no argument it takes the newest **stable** release, and while `sal` is
-pre-1.0 there are none — every 0.x release is published as a pre-release
-deliberately, because the design is still settling. So it falls back to the
-newest release of any kind and says which one it took.
+With no argument it takes the newest **stable** release, falling back to the
+newest release of any kind when there is none — which, while `sal` is pre-1.0,
+is always: every 0.x release is published as a pre-release deliberately,
+because the design is still settling. Either way it names the version it
+resolved before downloading it.
 
 The version there pins **the binary, not the lab**. The stack release a project
 runs is pinned per-project and moved by `sal upgrade`. Keeping those on separate
