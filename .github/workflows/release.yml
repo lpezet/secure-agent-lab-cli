@@ -47,7 +47,11 @@ jobs:
       # So: bumping cosign-release across a format boundary means checking the
       # installer too. The failure is loud and lands at the one moment nobody is
       # watching, which is exactly when a release is being cut.
-      - uses: sigstore/cosign-installer@v4
+      # An exact release, not `@v4`: sigstore published a floating `v3` alias
+      # tag and has published no `v4` one, so `@v4` does not resolve at all.
+      # Pinning exactly is the better default here anyway — this is the step
+      # that fetches the thing that signs our releases.
+      - uses: sigstore/cosign-installer@v4.1.2
         with:
           cosign-release: "v3.1.3"
 
