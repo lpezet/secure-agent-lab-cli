@@ -1,27 +1,32 @@
-# A full lifecycle, start to finish
+# Run Claude Code behind the boundary
 
-Every command in the grammar, in the order you would actually meet them:
-create a lab, give it a credential path, start it, watch what the agent does,
-check it is still what it claims to be, move it to a newer release, and take it
-down.
+A walkthrough with a destination: by the end you have Claude Code running
+inside a lab, reaching Anthropic through a proxy that holds the credential the
+agent never sees, over an allowlist you wrote, with every request in an audit
+trail.
 
-Run it against a throwaway project first. Nothing here needs a real credential
-until step 4, and the steps after it work with a fake one — the lab comes up,
-the trail records, and only a request that actually reaches the vendor fails.
+Two halves. The first builds that — install `sal`, create a lab, give it a
+credential path, put Claude Code in the image, open the egress it needs, start
+it, work in it, watch the trail. The second is keeping it honest afterwards:
+checking it is still what it claims to be, moving it to a newer release, and
+taking it down.
+
+Run it against a throwaway project first. The credential is the only thing you
+cannot fake — steps 1 to 3 work without one, and Claude itself will not.
 
 **Prerequisites.** Docker with the compose plugin, network access on the first
-run (the stack is fetched from GitHub, and five images are built), and a
-project directory. `sal` never needs the Docker socket itself — it shells out
-to `docker compose`.
+run (the stack is fetched from GitHub, and five images are built), a project
+directory, and an Anthropic credential. `sal` never needs the Docker socket
+itself — it shells out to `docker compose`.
 
-> **What is verified and what is not.** Steps 1–4, 9, and the dry runs in 11
-> and 12 were run end to end while writing this, against stack v1.12.0, and
-> their output below is real — steps 0, 1, 2 and 9 with the published `v0.1.0`
-> binary rather than a local build. The steps that start containers — 6, 7, 8, 10,
-> 13 — are exercised by the test suite against a fake `docker`, and the
-> generated `compose.yaml` is validated by real compose, but that half of the
-> sequence has not yet been run against real containers. Expect the sense to be
-> right and a message or two to differ.
+> **What is verified and what is not.** Steps 1–4, 10, and the dry runs in 12
+> and 13 were run end to end while writing this, against stack v1.12.0, and
+> their output below is real — steps 0, 1, 2 and 10 with a published binary
+> rather than a local build. The steps that start containers — 6 through 9, 11
+> and 14 — are exercised by the test suite against a fake `docker`, and the
+> generated `compose.yaml` is validated by real compose, but that half has not
+> been run end to end against real containers. Expect the sense to be right and
+> a message or two to differ.
 
 ---
 
@@ -268,7 +273,48 @@ left anthropic-auth.token alone
 
 ---
 
-## 5. Open the egress allowlist
+## 5. Put Claude Code in the image
+
+The lab image is **the one thing in the deployment that is yours**. `sal
+upgrade` never overwrites it and `sal drift` never judges its contents — it is
+your build context, so a tool that reported your own Dockerfile as an intrusion
+would be wrong.
+
+```bash
+$EDITOR ~/.config/secure-agent-lab/labs/my-agent-project-082ce7bb/lab/Dockerfile
+```
+
+The template ships a Debian-based image with Node already on it, and a comment
+marking where to add things. Append:
+
+```dockerfile
+# Last, so busting this layer does not redo apt. Accepts "latest" (default),
+# "stable", or an exact version. Change the value to force a re-download.
+ARG CLAUDE_VERSION=latest
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}"
+```
+
+**Build-time network is the HOST's, not the lab's.** The allowlist governs the
+running container's egress; `docker build` goes out through your machine. So
+that `curl` works even though the lab can currently reach nothing — and it
+means the image build is *not* in the audit trail. That is a real property
+worth being conscious of rather than a gap: what you bake into the image is
+outside the boundary, and the boundary begins when the container starts.
+
+TLS through the proxy is already handled. The template sets
+`NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE` and
+`GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` to the proxy's CA, plus `HTTP_PROXY` and
+`HTTPS_PROXY` in **both** cases — gRPC reads only the lowercase ones, and with
+the uppercase alone a gRPC client ignores the proxy entirely.
+
+For a fuller example — a non-root `agent` user, an entrypoint, a plugin
+installer — read `examples/claude-code/` in the stack repo. Note that it keeps
+the container alive with `sleep infinity` and attaches with `exec`, because
+Claude Code misbehaves as a detached container entrypoint.
+
+---
+
+## 6. Open the egress allowlist
 
 The lab starts able to reach **nothing**. That is the right default and a
 surprising one, so `init` says so — but it is still the step people forget.
@@ -277,10 +323,18 @@ surprising one, so `init` says so — but it is still the step people forget.
 $EDITOR ~/.config/secure-agent-lab/labs/my-agent-project-082ce7bb/allowlist
 ```
 
-One entry per line, `domain [METHODS]`:
+One entry per line, `domain [METHODS]`. For Claude Code, one line is enough:
 
 ```
 api.anthropic.com       POST
+```
+
+That is the only host the `anthropic` entry declares, and the addon matches
+exactly it — the proxy injects your credential into requests going there and
+nowhere else. Add what else your agent needs; a repo-working agent usually
+wants GitHub too:
+
+```
 api.github.com          GET,POST,PATCH,PUT,DELETE
 github.com              *
 ```
@@ -291,9 +345,17 @@ METHODS defaults to `GET,HEAD,OPTIONS` — safe reads only. **The file being
 present is what makes the allowlist enforcing**; deleting it permits every
 destination, with a warning at startup.
 
+Expect `blocked` lines in the trail even when everything works. Claude Code
+also reaches telemetry and error-reporting hosts, which are not on the
+allowlist and should not be — they are denied, and the denials are recorded.
+That is the boundary doing its job, not a misconfiguration. To quiet them, add
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` to the lab's `lab.env`; a key you
+add there by hand survives `providers add` and `upgrade`, which only touch the
+ones a manifest names.
+
 ---
 
-## 6. Start it
+## 7. Start it
 
 ```bash
 sal up --build
@@ -326,7 +388,7 @@ my-agent-project-082ce7bb
 
 ---
 
-## 7. Watch what the agent does
+## 8. Watch what the agent does
 
 ```bash
 sal observer open
@@ -368,16 +430,42 @@ Start it with `sal up`, or `sal labs list` to see what is running on this machin
 
 ---
 
-## 8. Work inside the boundary
+## 9. Run Claude Code inside it
+
+This is the destination.
 
 ```bash
-sal open                       # a shell in the lab container
+sal open claude                # Claude Code, behind the boundary
+```
+
+`sal open` takes a command, so this execs `claude` directly rather than
+dropping you at a shell first. With no arguments you get a shell instead:
+
+```bash
+sal open                       # bash in the lab container
 sal open python -c 'import urllib.request; print(1)'
 ```
 
+Nothing about `claude` is special to `sal` — it is your image, your command.
+There is deliberately no `sal claude`: the CLI knows nothing about any vendor,
+which is the same rule that stops it having a flag for Anthropic's two
+credential kinds. A shell alias is the shortcut, and it costs nothing:
+
+```bash
+alias salc='sal open claude'
+```
+
+**What is different about running it here.** Claude has no credential. Your
+token is in a file the broker reads, on a network the lab is not on; the proxy
+injects it into requests to `api.anthropic.com` on the way past. `lab.env` sets
+`ANTHROPIC_API_KEY=proxy-injected`, which is a placeholder — a real-looking
+value the agent can read and nothing can be done with. Read it out of the
+process, exfiltrate it, print it in a log: it is worth nothing anywhere.
+
 Your project is mounted at `/workspace`, and it is the one mount the agent can
 write. `HTTP_PROXY`/`HTTPS_PROXY` (and their lowercase forms, which is what
-gRPC reads) point at the proxy, and the proxy's CA is trusted.
+gRPC reads) point at the proxy, and the proxy's CA is trusted — which is how a
+Node tool talks through an intercepting proxy at all.
 
 `sal open` opens the **lab**. If a dev container is running for the same
 project, it is a warning rather than a redirect: a dev container you brought
@@ -386,12 +474,27 @@ and nothing it does reaches the audit trail. Opening it because it happened to
 be there would hand you a shell you believe is inside the boundary when it is
 not.
 
-Try a request to something not on the allowlist. It is refused by the proxy,
-and the refusal is in the trail.
+Now put the two windows side by side. Ask Claude to do something that reaches
+the network, and watch step 8's `sal observer tail` record the request going
+out with a credential it never handled:
+
+```
+2026-08-16T20:41:02Z  proxy   cred_injected  provider=anthropic host=api.anthropic.com
+```
+
+Then ask it for something off the allowlist and watch the other half work:
+
+```
+2026-08-16T20:41:19Z  proxy   blocked        reason=allowlist host=example.com method=GET
+```
+
+Those two lines are the whole thesis of the stack: the agent reached what you
+permitted, with a credential it never held, and the attempt to go elsewhere is
+both refused and recorded.
 
 ---
 
-## 9. Check it is still what it claims to be
+## 10. Check it is still what it claims to be
 
 ```bash
 sal drift
@@ -466,7 +569,7 @@ question, and it has its own command — step 11.
 
 ---
 
-## 10. Turn a feature off and on
+## 11. Turn a feature off and on
 
 ```bash
 sal features list
@@ -502,7 +605,7 @@ enable/disable/list there would be no single place to answer "what is on?".
 
 ---
 
-## 11. Move to a newer release
+## 12. Move to a newer release
 
 ```bash
 sal upgrade --dry-run
@@ -530,7 +633,7 @@ sal drift                          # and confirm
 
 ---
 
-## 12. Remove a provider
+## 13. Remove a provider
 
 ```bash
 sal providers remove anthropic --dry-run
@@ -561,7 +664,7 @@ reversible action only teaches people to clear prompts.
 
 ---
 
-## 13. Stop
+## 14. Stop
 
 ```bash
 sal down                    # containers go; the audit trail and proxy CA survive
@@ -636,12 +739,15 @@ sal init                                  # create the lab, outside the project
 sal providers list --available            # what the bank offers at this pin
 sal providers add anthropic               # install the credential path
 sal secrets set anthropic                 # store the credential, echo off
-$EDITOR <lab>/allowlist                   # egress starts closed
+$EDITOR <lab>/lab/Dockerfile              # add Claude Code — the image is yours
+$EDITOR <lab>/allowlist                   # api.anthropic.com POST; egress starts closed
 sal up --build                            # six services
-sal observer open                         # the audit trail
-sal open                                  # a shell inside the boundary
-sal drift                                 # is it what it claims to be?
-sal upgrade                               # move the pin AND the files
-sal down                                  # trail survives; --volumes deletes it
+sal observer open                         # the audit trail, in a second window
+sal open claude                           # THE POINT: Claude, behind the boundary
+
+sal drift                                 # is it still what it claims to be?
+sal upgrade                               # move the pin AND the files it ships
+sal features list                         # what is on, and what is running
 sal labs list                             # what is running with credentials attached
+sal down                                  # trail survives; --volumes deletes it
 ```
