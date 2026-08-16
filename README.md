@@ -4,11 +4,11 @@ A CLI over [secure-agent-lab](https://github.com/lpezet/secure-agent-lab) — th
 Docker stack that runs autonomous agents without exposing long-lived
 credentials to the agent's process.
 
-> **Status: early, and pre-1.0 honestly.** Every command in the grammar now
-> works against a real stack — which is the first of the five things 1.0 means,
-> not 1.0 itself. The two on-disk formats are not declared stable yet, the
-> `lab_setup` question is unresolved, and the install script has never been run
-> against a published release.
+> **Status: early, and pre-1.0 honestly.** Every command in the grammar works
+> against a real stack, and the install script has been run against a published
+> release — two of the five things 1.0 means, not 1.0 itself. The two on-disk
+> formats are not declared stable yet, and the `lab_setup` question is
+> unresolved.
 
 ## What it is for
 
@@ -27,6 +27,11 @@ what `sal` is for; everything else it does is secondary.
 curl -fsSL https://raw.githubusercontent.com/lpezet/secure-agent-lab-cli/main/install.sh | bash
 curl -fsSL https://raw.githubusercontent.com/lpezet/secure-agent-lab-cli/main/install.sh | bash -s v0.1.0
 ```
+
+With no argument it takes the newest **stable** release, and while `sal` is
+pre-1.0 there are none — every 0.x release is published as a pre-release
+deliberately, because the design is still settling. So it falls back to the
+newest release of any kind and says which one it took.
 
 The version there pins **the binary, not the lab**. The stack release a project
 runs is pinned per-project and moved by `sal upgrade`. Keeping those on separate

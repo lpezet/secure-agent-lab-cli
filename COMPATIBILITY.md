@@ -139,10 +139,37 @@ Five things, all of them checkable:
    another field being wanted.
 3. **The `lab_setup` question resolved.** Fragments install today and nothing
    sources them, so a bank entry that ships one installs without fully working.
-4. **The install script exercised against a real published release.** Its
-   refusals are tested (`tests/install/`), but no release has ever been
-   downloaded by it.
+4. **The install script exercised against a real published release.** Done at
+   v0.1.0: the script resolved the release, verified a Sigstore bundle with a
+   real cosign, verified the checksum and installed a working binary. It found
+   two bugs no fake could — see below.
 5. **This document**, kept current.
+
+### What actually publishing a release found
+
+Worth recording, because both were invisible to a test suite that had 28
+passing checks over the same script. Neither was reachable without a release
+on GitHub to point the thing at.
+
+**`curl … | bash` resolved to a release it could not install.** GitHub's
+`/releases/latest` excludes pre-releases, and every 0.x release here is
+published as one deliberately — so that endpoint answers either nothing or the
+oldest release that happened to be marked stable, which is the opposite of what
+"latest" means to whoever typed it. Two individually correct decisions —
+publish 0.x as pre-releases, resolve "latest" from the endpoint named latest —
+combining into a script that installed the wrong artifact. `install.sh` now
+falls back to the newest release of any kind and says so.
+
+**The tag parser took the last quoted string on the line.** A list response can
+arrive on one line, where `s/.*"([^"]+)".*/\1/` is greedy and captures
+`prerelease` rather than the tag. The fake `curl` had been answering both
+endpoints with the same one-field object, so neither the endpoint difference
+nor the parse could be seen. It now answers them differently, which is what
+made both visible.
+
+The general lesson is about fakes, not about releases: a fake that answers
+every URL the same way tests the caller's happy path and nothing about the
+distinction the caller exists to make.
 
 ## Deprecation
 

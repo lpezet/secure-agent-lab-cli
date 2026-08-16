@@ -6,7 +6,7 @@ on:
   # A rehearsal, runnable at any time: everything a real release does except
   # publishing. `make snapshot` covers the build locally, but it cannot cover
   # the half that only exists here — fetching a pinned cosign, and having an
-  # OIDC token to sign with. That half is what broke the first v0.2.0 tag, and
+  # OIDC token to sign with. That half is what broke the first tag pushed, and
   # a tag is a bad place to discover it: the tag is already public, and undoing
   # one means deleting it.
   workflow_dispatch:
@@ -36,7 +36,7 @@ jobs:
       # bundle they use.
       #
       # The action major has to move WITH cosign's format, which is what caught
-      # the first v0.2.0 tag. cosign v3 stopped publishing a detached
+      # the first tag pushed. cosign v3 stopped publishing a detached
       # `cosign-linux-amd64.sig` beside its binaries and publishes
       # `cosign-linux-amd64.sigstore.json` instead — the same removal that broke
       # our own signing. The v3 installer verifies with `--signature <file>.sig`,

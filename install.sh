@@ -53,10 +53,44 @@ case "$(uname -m)" in
   *)             die "unsupported architecture $(uname -m)" ;;
 esac
 
+# The first tag_name in a releases API response, or empty if it answered
+# nothing. Empty is a real answer here, not a failure: /releases/latest is a
+# 404 for a repo whose only releases are pre-releases.
+#
+# `grep -o` for the field rather than a sed over the whole line, and it is not
+# style. A list response can arrive on one line, and `s/.*"([^"]+)".*/\1/` is
+# greedy — on `[{"tag_name": "v1.2.3", "prerelease": true}]` it captures
+# `prerelease`, the last quoted string, not the tag. Matching the field and
+# taking the first match gives the newest release in document order, which is
+# what both endpoints promise.
+tag_from() {
+  curl -fsSL "$1" 2>/dev/null \
+    | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
+    | head -1 \
+    | sed -E 's/.*"([^"]*)"$/\1/' || true
+}
+
+# "latest" means the newest STABLE release, which is what /releases/latest
+# answers — it excludes pre-releases, deliberately.
+#
+# While sal is pre-1.0 there are no stable releases: every 0.x release is
+# published as a pre-release on purpose, because the design is still settling
+# and the two on-disk formats are not declared stable. So that endpoint answers
+# 404 here, and the fallback takes the newest release of any kind and says
+# which. After 1.0 the first branch answers and the fallback stops being
+# reached.
+#
+# Found by publishing a release and running this script against it, which is
+# the only way it could be found: with no stable release the endpoint answers
+# either nothing or whichever old release happened to be marked stable, and
+# neither is what "latest" means to whoever typed it.
 if [ "$VERSION" = "latest" ]; then
-  VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep '"tag_name":' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-  [ -n "$VERSION" ] || die "could not determine the latest release"
+  VERSION=$(tag_from "https://api.github.com/repos/${REPO}/releases/latest")
+  if [ -z "$VERSION" ]; then
+    VERSION=$(tag_from "https://api.github.com/repos/${REPO}/releases?per_page=1")
+    [ -n "$VERSION" ] || die "could not determine the latest release"
+    note "no stable release yet — installing pre-release ${VERSION}"
+  fi
 fi
 
 archive="sal_${VERSION#v}_${os}_${arch}.tar.gz"

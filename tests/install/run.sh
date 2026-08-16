@@ -95,8 +95,18 @@ while [ $# -gt 0 ]; do
 	esac
 done
 case "$url" in
-*api.github.com*)
+# The two release endpoints answer DIFFERENTLY, and a fake that conflated them
+# is why install.sh shipped pointing everyone at a release it could not
+# install: /releases/latest excludes pre-releases and 404s when every release
+# is one, while /releases lists them newest first.
+*api.github.com*releases/latest*)
+	[ -z "${FAKE_NO_STABLE:-}" ] || exit 22
 	printf '{"tag_name": "%s"}\n' "${FAKE_LATEST:-v1.2.3}"
+	exit 0
+	;;
+*api.github.com*releases*)
+	[ -z "${FAKE_NO_RELEASES:-}" ] || exit 22
+	printf '[{"tag_name": "%s", "prerelease": true}]\n' "${FAKE_PRERELEASE:-v1.2.3}"
 	exit 0
 	;;
 esac
@@ -161,6 +171,9 @@ run() {
 		HOME="$work/home" \
 		FAKE_RELEASE_DIR="$FAKE_RELEASE_DIR" \
 		FAKE_LATEST="${FAKE_LATEST:-}" \
+		FAKE_NO_STABLE="${FAKE_NO_STABLE:-}" \
+		FAKE_NO_RELEASES="${FAKE_NO_RELEASES:-}" \
+		FAKE_PRERELEASE="${FAKE_PRERELEASE:-}" \
 		FAKE_COSIGN_STATUS="${FAKE_COSIGN_STATUS:-0}" \
 		FAKE_UNAME_S="${FAKE_UNAME_S:-}" FAKE_UNAME_M="${FAKE_UNAME_M:-}" \
 		PATH="$path" \
@@ -189,9 +202,36 @@ check "says the signature was NOT checked when cosign is missing" \
 	"$(said 'signature NOT checked' && echo 0 || echo 1)"
 
 # ------------------------------------------------------------------- latest
+#
+# Two endpoints, and the difference between them is not academic: it is how
+# the first release shipped with `curl … | bash` resolving to something it
+# could not install. /releases/latest excludes pre-releases, every 0.x release
+# is published as one deliberately, and so that endpoint answers either nothing
+# or whichever old release happened to be marked stable.
 target="$work/latest"
 FAKE_LATEST=v1.2.3 run "$target"
-check "resolves 'latest' from the releases API" "$([ -x "$target/sal" ] && echo 0 || echo 1)"
+check "resolves 'latest' from the stable release when there is one" \
+	"$([ -x "$target/sal" ] && echo 0 || echo 1)"
+
+# Pre-1.0 this is the ONLY path that runs, so it is the one a user meets.
+target="$work/latest-prerelease"
+FAKE_NO_STABLE=1 FAKE_PRERELEASE=v1.2.3 run "$target"
+check "falls back to the newest pre-release when no release is stable" \
+	"$([ -x "$target/sal" ] && echo 0 || echo 1)"
+
+# And says so. Installing a pre-release without a word is how someone comes to
+# believe the design is settled when the release page says it is not.
+check "says the version it fell back to is a pre-release" \
+	"$(said 'no stable release yet' && echo 0 || echo 1)"
+
+# Neither endpoint answering is a different thing from either one being empty,
+# and it must not proceed to construct an asset URL from an empty version.
+target="$work/latest-none"
+FAKE_NO_STABLE=1 FAKE_NO_RELEASES=1 run "$target"
+check "refuses when neither endpoint names a release" \
+	"$([ ! -e "$target/sal" ] && echo 0 || echo 1)"
+check "says it could not determine the latest release" \
+	"$(said 'could not determine the latest release' && echo 0 || echo 1)"
 
 # --------------------------------------------------------------- a tampered
 # archive. THE check: the checksum file is what stands between a mirror and
