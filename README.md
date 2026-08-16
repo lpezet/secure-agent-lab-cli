@@ -78,6 +78,14 @@ the secrets directory mounted. That is what `sal labs list` is for, and
 `sal labs down` is how you stop one whose project no longer exists — the case
 `sal down` cannot reach, because it finds a lab from a project.
 
+**The wiring comes from the stack, not from `sal`.** A lab's `compose.yaml` is
+the stack's own `template/deployment/compose.yaml`, fetched at the release the
+lab is pinned to and used verbatim — so a change to the service graph ships
+with the boundary rather than waiting for a CLI release. `sal` supplies the
+per-deployment values through `.env`: which project directory to mount, where
+the credentials live, and an empty `OBSERVER_PORT` so Docker assigns one and
+two labs never collide.
+
 **`sal drift` is the check for the problem above.** It compares every file the
 deployment owns against the release it is pinned to — proxy addons, broker
 providers, gateway configs and the generated compose file — and exits non-zero

@@ -10,7 +10,7 @@ cd project
 exec sal init --stack-dir $FIXTURES/local-stack
 stdout '^lab\s+project-[0-9a-f]{8}$'
 stdout '^at\s+.*[/\\]labs[/\\]project-[0-9a-f]{8}$'
-stdout '^stack\s+v1\.10\.1'
+stdout '^stack\s+v1\.12\.0'
 stdout '^project\s+'
 
 # At 1.10.0 and above the proxy IMAGE carries 000_policy.py and
@@ -19,10 +19,10 @@ stdout '^project\s+'
 # warning. Said out loud rather than left as an absence: a reader who knows the
 # older shape would otherwise wonder which control went missing.
 ! stdout '^addon\s+000_policy\.py$'
-stdout 'addons   carried by the proxy image at v1\.10\.1, not vendored here'
+stdout 'addons   carried by the proxy image at v1\.12\.0, not vendored here'
 
 # The default release is stated, never silent.
-stderr 'pinning to stack v1\.10\.1'
+stderr 'pinning to stack v1\.12\.0'
 stderr '--stack'
 
 # Reading a local checkout means the release went unverified, so no commit is
@@ -32,7 +32,7 @@ stderr 'sal providers add'
 
 # The project keeps only a pointer — no absolute paths, so it can be committed.
 exists .sal/lab.json
-grep '"stack_tag": "v1.10.1"' .sal/lab.json
+grep '"stack_tag": "v1.12.0"' .sal/lab.json
 grep '"name": "project-' .sal/lab.json
 ! grep '/' .sal/lab.json
 
@@ -41,7 +41,7 @@ grep '"name": "project-' .sal/lab.json
 ! exists .sal/installed.json
 
 exec sal version
-stdout '^stack\s+v1\.10\.1$'
+stdout '^stack\s+v1\.12\.0$'
 
 # A virgin lab has no PROVIDERS, even though it has addons — the two are
 # recorded separately, because a stack addon is not a bank entry and
@@ -57,9 +57,9 @@ stderr 'already has a lab'
 
 # A second project gets its own lab, at a release it names itself.
 cd $WORK/other
-exec sal init --stack-dir $FIXTURES/local-stack --stack v1.8.0
+exec sal init --stack-dir $FIXTURES/local-stack --stack v1.13.0
 stdout '^lab\s+other-[0-9a-f]{8}$'
-stdout '^stack\s+v1\.8\.0'
+stdout '^stack\s+v1\.13\.0'
 ! stderr 'pinning to stack'
 
 # Names derive from the path, so two projects with the same basename do not
@@ -70,42 +70,49 @@ exec sal init --stack-dir $FIXTURES/local-stack
 stdout '^lab\s+project-[0-9a-f]{8}$'
 stderr 'nested inside one tree'
 
-# Below 1.10.0, a checkout with no addons directory REFUSES rather than
-# creating a lab whose proxy would forward to the broker. "Created but not safe
-# yet" is not a state worth being able to reach.
-#
-# Pinned explicitly, because this stopped being true at the default: from
-# 1.10.0 the image carries the addons, so a stack tree without them is not a
-# deployment missing a control — it is a deployment that never needed the files.
+# A checkout with no addons directory is no longer a problem at all: from
+# stack 1.10.0 the proxy image carries them, and sal only creates labs at
+# releases newer than that — so those files were never this deployment's to
+# hold. The refusal that used to be here belonged to a lab shape sal can no
+# longer produce; `sal drift` still knows the older one, for labs it did not
+# create.
 cd $WORK/no-addons-project
-! exec sal init --stack v1.9.2 --stack-dir $WORK/hollow-stack
-stderr 'no barrier between the lab container and the broker'
-! exists .sal/lab.json
-
-# And at the default, the same hollow checkout is simply not a problem.
 exec sal init --stack-dir $WORK/hollow-stack
 stdout 'carried by the proxy image'
 exists .sal/lab.json
 
+# A checkout with no TEMPLATE is refused, though — there is no wiring to
+# install, and a deployment directory with no compose file is not a lab.
+cd $WORK/no-template-project
+! exec sal init --stack-dir $WORK/templateless-stack
+stderr 'cannot obtain the deployment template'
+! exists .sal/lab.json
 
-# ------------------------------------------------ below the line, it vendors
-#
-# Under 1.10.0 the image carries nothing, and a deployment that does not vendor
-# 000_policy.py has no internal-host block at all: the proxy sits on both
-# networks, so with no policy addon loaded it forwards to the broker and the
-# cred-gateway whitelist can be walked around entirely.
-cd $WORK/older
-exec sal init --stack v1.9.2 --stack-dir $FIXTURES/local-stack
-stdout '^stack\s+v1\.9\.2'
-stdout '^addon\s+000_policy\.py$'
-stdout '^addon\s+001_allowlist\.py$'
-! stdout 'carried by the proxy image'
+# So is a release older than the one whose template sal can use verbatim. Below
+# it the file names specific bank entries in the broker's environment, and
+# `environment:` wins over `env_file:` — a lab built from it would read
+# credential paths the template chose over the ones its manifests declare.
+! exec sal init --stack v1.11.3 --stack-dir $FIXTURES/local-stack
+stderr 'only usable from v1\.12\.0'
+! exists .sal/lab.json
+
 
 -- project/.keep --
 -- older/.keep --
 -- other/.keep --
 -- no-addons-project/.keep --
+-- no-template-project/.keep --
+-- templateless-stack/bank/.keep --
 -- hollow-stack/bank/.keep --
+-- hollow-stack/template/deployment/compose.yaml --
+name: secure-agent-lab
+services:
+  broker:
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.12.0:stack/broker
+-- hollow-stack/template/deployment/allowlist --
+# Nothing allowed by default.
+-- hollow-stack/template/deployment/lab/Dockerfile --
+FROM debian:stable-slim
 -- nested/.sal/lab.json --
 {"schema_version": 1, "name": "outer-lab", "stack_tag": "v1.9.0"}
 -- nested/project/.keep --

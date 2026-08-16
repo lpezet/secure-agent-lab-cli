@@ -373,17 +373,50 @@ what `.env` says and what Docker says, side by side, and warns when they differ
 in a lab that is up. `features disable` never touches a volume: the trail the
 observer was serving outlives the observer.
 
-⚠️ **The compose template in `internal/compose/templates/` is a reference
-implementation living here temporarily.** It describes the stack's wiring, which
-is the boundary's business — so a change to the service graph currently needs a
-`sal` release, which is the coupling the split exists to prevent. The intended
-end state is the stack repo carrying it and `sal` fetching it at the pinned tag,
-the way it already fetches the bank. Keep it in one file and keep it dumb, so
-moving it is a copy. Note also that `stack/` in the stack repo is **not** that
-template: `stack/broker/` is the broker's source, while a deployment's `broker/`
-is the providers it loads. Same name, opposite roles.
+**The deployment's wiring is FETCHED, not rendered.** `sal` carried a copy of
+the service graph in `internal/compose/templates/` until stack 1.12.0, with a
+warning saying it was temporary — a change to the stack's wiring needed a `sal`
+release, which is the coupling the two-repo split exists to prevent. That is
+now gone: `template/deployment/` is fetched at the pinned commit and written
+**verbatim**, because everything per-deployment in it arrives through `.env`
+and `lab.env`.
 
-**An upgrade rewrites files, and DELETES the ones the new release dropped.**
+Three things had to change over there first, and each is worth knowing because
+each is a property `sal` depends on:
+
+- the observer's host port had to be assignable rather than fixed, or two labs
+  on one machine collide (stack #79);
+- the observer had to sit behind a compose profile, or `features` has nothing
+  to switch (stack #80);
+- the file had to name no provider, or every lab's compose would list
+  credential paths for entries it does not have — and `environment:` wins over
+  `env_file:`, so those would override what a manifest declares (stack #95,
+  #96).
+
+**`version.TemplateFrom` is a floor, not a warning.** Below stack 1.12.0 the
+template either does not exist at that path or names specific bank entries, so
+`init` and `upgrade` refuse rather than half-support it, and `drift` says the
+compose file was not compared instead of inventing a comparison. A lab created
+before that release keeps working; `sal upgrade` is what moves it.
+
+**Two values in `.env` are the wiring's, not a provider's**, and they are the
+ones whose defaults are quietly wrong for a `sal`-managed lab:
+`WORKSPACE_DIR` (whose default mounts a directory inside the deployment rather
+than the project) and `AGENT_CREDS_DIR` (whose default is the stack's legacy
+credential location, which `config.LegacySecretsDir` names and `sal`
+deliberately does not use). `OBSERVER_PORT` is set EMPTY on purpose — the
+template publishes `127.0.0.1:${OBSERVER_PORT-9000}`, and empty is what leaves
+the port for Docker to assign.
+
+**The compose project name is passed with `-p` on every invocation**, and
+written to `.env` as `COMPOSE_PROJECT_NAME` as well. The template hardcodes
+`name: secure-agent-lab`, which is right for a deployment somebody copies by
+hand and wrong for a machine running one lab per project: without this, every
+lab is the same compose project, `labs list` cannot tell them apart, and
+`labs down` stops whichever lab that name currently resolves to. Precedence is
+`-p` > `COMPOSE_PROJECT_NAME` > the file, verified against compose 5.1.4.
+
+**An upgrade rewrites files, and DELETES the ones the new release dropped.****An upgrade rewrites files, and DELETES the ones the new release dropped.**
 Repinning without rewriting is not an upgrade — that is the problem this repo
 exists for. The deletion half carries its own risk and is easy to forget: a
 cred-gateway config left behind keeps whitelisting a route the entry no longer

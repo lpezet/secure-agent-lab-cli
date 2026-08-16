@@ -110,7 +110,7 @@ func runDrift(cmd *cobra.Command, showDiff bool) error {
 	for _, f := range unresolved {
 		report.Add(f)
 	}
-	if err := compareCompose(l, rec.StackTag, report); err != nil {
+	if err := compareCompose(cmd, l, rec, commit, report); err != nil {
 		return err
 	}
 
@@ -285,15 +285,29 @@ func sourceWord(e deployment.Entry) string {
 	return "the bank at this release"
 }
 
-// compareCompose checks the generated compose file against what sal would
-// render for this deployment now.
+// compareCompose checks this deployment's compose file against the one the
+// stack ships at its pinned release.
 //
-// Worth its own comparison rather than being left out as "generated": the
-// loopback-only observer publish, the internal lab network, and which
-// directories are mounted where all live in this file, and an edit to any of
-// them is a change to the boundary that no other check would see.
-func compareCompose(l *lab.Lab, stackTag string, report *drift.Report) error {
-	want, err := renderComposeBytes(l, stackTag)
+// A byte comparison, and it can be, because the file is used verbatim: every
+// per-deployment value it needs arrives through .env. Worth checking rather
+// than trusting: the loopback-only observer publish, the internal lab network
+// and which directories are mounted where all live in this file, and an edit
+// to any of them is a change to the boundary that no other check would see.
+func compareCompose(cmd *cobra.Command, l *lab.Lab, rec *deployment.Record, commit string, report *drift.Report) error {
+	stackTag := rec.StackTag
+
+	// A lab pinned below the release the template became usable at has a
+	// compose file sal rendered itself, or one from a template that named
+	// providers. There is nothing to compare it against that would mean
+	// anything, and a MISSING or DRIFT line here would be about sal's history
+	// rather than about this deployment.
+	if !version.StackHasUsableTemplate(stackTag) {
+		report.Add(drift.Finding{Kind: drift.Note, Path: lab.ComposeName,
+			Detail: "not compared: " + stackTag + " ships no template sal can read; `sal upgrade` moves this lab to one"})
+		return nil
+	}
+
+	want, err := templateCompose(cmd, commit)
 	if err != nil {
 		return err
 	}
@@ -307,11 +321,11 @@ func compareCompose(l *lab.Lab, stackTag string, report *drift.Report) error {
 		return err
 	}
 	if string(want) == string(have) {
-		report.Add(drift.Finding{Kind: drift.OK, Path: lab.ComposeName, Detail: "matches what sal renders for " + stackTag})
+		report.Add(drift.Finding{Kind: drift.OK, Path: lab.ComposeName, Detail: "matches the template at " + stackTag})
 		return nil
 	}
 	report.Add(drift.Finding{Kind: drift.Drift, Path: lab.ComposeName, Ref: want,
-		Detail: "differs from what sal renders for " + stackTag})
+		Detail: "differs from the template at " + stackTag})
 	return nil
 }
 

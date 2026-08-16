@@ -90,6 +90,17 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 		fmt.Fprintf(errOut, "pinning to stack %s, the newest release this sal knows about; pass --stack to choose another\n", stackTag)
 	}
 
+	// Refused before anything is created. Below this release the deployment
+	// template either does not exist at this path or names specific bank
+	// entries in the broker's environment — and `environment:` wins over
+	// `env_file:`, so a lab built from it would read credential paths the
+	// template chose rather than the ones its manifests declare.
+	if !version.StackHasUsableTemplate(stackTag) {
+		return fmt.Errorf("sal cannot create a lab at stack %s: the deployment template it installs "+
+			"is only usable from v%s onwards.\nPin this lab to v%s or newer, or use an older sal",
+			stackTag, version.TemplateFrom, version.TemplateFrom)
+	}
+
 	name, err := lab.NameFor(projectDir)
 	if err != nil {
 		return err
@@ -120,53 +131,36 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 
 	// The broker mounts this. If it does not exist when the container starts,
 	// Docker creates it root-owned, and every later `sal secrets set` fails on
-	// a directory the user cannot write.
-	if _, err := config.SecretsDir(); err != nil {
+	// a directory the user cannot write. The path also goes into .env, because
+	// the template takes it as AGENT_CREDS_DIR rather than assuming a location.
+	secretsDir, err := secretsDirFor()
+	if err != nil {
 		return err
 	}
 
-	// Below 1.10.0, fetch the stack's own proxy addons BEFORE creating
-	// anything, so a lab is never left existing without them.
-	//
-	// This is not optional decoration at those releases. 000_policy.py is what
-	// stops the proxy forwarding to the broker — and the proxy sits on both
-	// networks, so without it the lab can ask the proxy to fetch
-	// http://broker:8080/<any route> and walk straight around the cred-gateway
-	// whitelist, including the routes a manifest marks exposed:false.
-	//
-	// At 1.10.0 and above the image carries them and loads them ahead of the
-	// /addons mount, so vendoring is not a smaller control — it is none at
-	// all, and the entrypoint skips the copy with a warning naming the file.
+	// No proxy addons are installed, and none can be: a lab sal creates is
+	// always at a release that carries them in the proxy image, because the
+	// template it is built from only exists at those releases. The predicate
+	// that draws that line still matters for labs sal did NOT create — see
+	// version.StackBakesAddons, which `sal drift` reads when it meets one.
+	if err := createLabTree(labDir); err != nil {
+		return err
+	}
 	var installed []string
-	baked := version.StackBakesAddons(stackTag)
-	if !baked {
-		addons, err := fetchBaseAddons(cmd, commit)
-		if err != nil {
-			return err
-		}
-		defer addons.Close()
 
-		if err := createLabTree(labDir); err != nil {
-			return err
-		}
-		if installed, err = copyAddons(addons.Dir, filepath.Join(labDir, "proxy")); err != nil {
-			return err
-		}
-	} else if err := createLabTree(labDir); err != nil {
-		return err
-	}
-
-	// The same renderer upgrade uses, so the two cannot drift apart on what a
-	// deployment's compose file should look like.
-	if err := renderCompose(&lab.Lab{Name: name, Dir: labDir, ProjectDir: projectDir}, stackTag); err != nil {
+	// The wiring comes from the stack at the pinned release, written verbatim.
+	// The file names its own tag in every build: line, so what this lab builds
+	// is fixed by which tag it was fetched at — and `sal upgrade` is the same
+	// fetch at a new one.
+	newLab := &lab.Lab{Name: name, Dir: labDir, ProjectDir: projectDir}
+	if _, err := installTemplate(cmd, newLab, commit, everyTemplateFile()); err != nil {
 		return err
 	}
 
 	// Both start empty and are filled by `sal providers add` from manifests.
 	// Compose requires the files to exist, and keeping them separate is what
 	// stops the lab container receiving the broker's environment.
-	if err := writeEnvFile(filepath.Join(labDir, ".env"),
-		"Broker and proxy configuration. Written by `sal providers add` from each\nprovider's manifest; a virgin lab needs nothing here."); err != nil {
+	if err := ensureEnvFiles(labDir); err != nil {
 		return err
 	}
 	// Written out rather than left to a default, so a `docker compose up` run
@@ -178,8 +172,9 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 	if err := writeProfiles(filepath.Join(labDir, ".env"), compose.DefaultProfiles); err != nil {
 		return err
 	}
-	if err := writeEnvFile(filepath.Join(labDir, "lab.env"),
-		"Environment for the lab container only, from each provider's lab_env.\nSeparate from .env so the lab never receives the broker's environment."); err != nil {
+	// The values the template asks for by name. Written after the comment
+	// header above, so the file reads as prose then settings.
+	if err := writeWiringEnv(newLab, secretsDir); err != nil {
 		return err
 	}
 
@@ -206,11 +201,12 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 	for _, a := range installed {
 		fmt.Fprintf(out, "addon    %s\n", a)
 	}
-	if baked {
-		// Said rather than left as an absence: a reader who knows the older
-		// shape would otherwise wonder which control went missing.
-		fmt.Fprintf(out, "addons   carried by the proxy image at %s, not vendored here\n", stackTag)
-	}
+	fmt.Fprintf(out, "wiring   %s, fetched at %s\n", composeName, stackTag)
+	// Said rather than left as an absence: a reader who knows the older shape
+	// would otherwise wonder which control went missing.
+	fmt.Fprintf(out, "addons   carried by the proxy image at %s, not vendored here\n", stackTag)
+
+	warnAboutTheAllowlist(cmd, newLab)
 
 	fmt.Fprintf(errOut, "\nNext: `sal providers add <name>` to give it a credential path, then `sal up`.\n"+
 		"The first `sal up` builds five images from the stack repo and takes a few minutes.\n")
@@ -402,6 +398,7 @@ func runnerFor(cmd *cobra.Command) (*lab.Lab, *compose.Runner, error) {
 	}
 	return l, &compose.Runner{
 		File:     l.ComposeFile(),
+		Project:  l.Name,
 		Stdout:   cmd.OutOrStdout(),
 		Stderr:   cmd.ErrOrStderr(),
 		Profiles: profiles,
@@ -456,6 +453,12 @@ func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
 	if to == "" {
 		to = version.DefaultStack
 	}
+	// The same floor init has, for the same reason: an upgrade re-fetches the
+	// deployment template, and below this release there is none sal can use.
+	if !version.StackHasUsableTemplate(to) {
+		return fmt.Errorf("sal cannot upgrade a lab to stack %s: the deployment template it installs "+
+			"is only usable from v%s onwards", to, version.TemplateFrom)
+	}
 
 	toCommit := ""
 	if local := stackDir(cmd); local == "" {
@@ -477,21 +480,13 @@ func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
 	}
 	defer tree.Close()
 
-	// An empty addons directory tells the planner this release carries them in
-	// the image — which also makes every addon the lab currently vendors
-	// stale, and an upgrade deletes stale files. That is the tidying the
-	// stack's own upgrade notes ask a human to do by hand.
-	addonsDir := ""
-	if !version.StackBakesAddons(to) {
-		addons, err := fetchBaseAddons(cmd, toCommit)
-		if err != nil {
-			return err
-		}
-		defer addons.Close()
-		addonsDir = addons.Dir
-	}
-
-	plan, err := installer.BuildUpgradePlan(b, addonsDir, rec, to, toCommit)
+	// No addons directory, ever. An upgrade target is at or above the release
+	// that carries them in the image — the floor below refuses anything
+	// older — and an empty directory tells the planner exactly that, which
+	// also makes every addon the lab currently vendors stale. Stale files are
+	// deleted, which is the tidying the stack's own upgrade notes ask a human
+	// to do by hand.
+	plan, err := installer.BuildUpgradePlan(b, "", rec, to, toCommit)
 	if err != nil {
 		return err
 	}
@@ -554,13 +549,37 @@ func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
 	// would read the absent value as everything on; compose, run by hand,
 	// would read it as nothing on. Writing it settles the disagreement in the
 	// direction that keeps the audit trail served.
+	// Both env files must EXIST before anything runs compose against this
+	// deployment: the template names them with env_file:, and compose refuses
+	// a file whose env_file is missing — for the whole project, not just the
+	// service that reads it. A lab created before sal wrote lab.env would
+	// otherwise upgrade successfully and then fail every later command.
+	if err := ensureEnvFiles(l.Dir); err != nil {
+		return err
+	}
 	if err := backfillProfiles(l.Dir); err != nil {
 		return err
 	}
 
-	// Re-render last: if anything above failed, the compose file still
+	// And the values the template reads by name. A lab created before sal
+	// fetched the template has none of them, and every default in that file is
+	// wrong for a sal-managed deployment: ${WORKSPACE_DIR:-./workspace} would
+	// mount an empty directory inside the deployment instead of the project,
+	// and ${AGENT_CREDS_DIR:-$HOME/.config/agent-creds} would look for
+	// credentials in the location sal deliberately does not use. Both fail
+	// quietly — the lab comes up and does nothing useful.
+	if err := writeWiringEnv(l, secretsDir); err != nil {
+		return err
+	}
+
+	// Re-fetched last: if anything above failed, the compose file still
 	// describes the release the files on disk came from.
-	if err := renderCompose(l, to); err != nil {
+	//
+	// Only the compose file. The allowlist is the operator's egress policy and
+	// lab/Dockerfile is the one image they build themselves — an upgrade that
+	// rewrote either would throw away their work to apply a change to
+	// something else.
+	if _, err := installTemplate(cmd, l, toCommit, map[string]bool{composeName: true}); err != nil {
 		return err
 	}
 	if err := deployment.Save(l.Dir, newRec); err != nil {
@@ -575,39 +594,6 @@ func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
 	fmt.Fprintf(errOut, "Run `sal up --build` to rebuild the images and restart against the new release.\n"+
 		"Until then the containers are still running the old one.\n")
 	return nil
-}
-
-// renderCompose rewrites compose.yaml for a release.
-func renderCompose(l *lab.Lab, stackTag string) error {
-	rendered, err := renderComposeBytes(l, stackTag)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(l.ComposeFile(), rendered, 0o600)
-}
-
-// renderComposeBytes renders without writing, which is what lets `sal drift`
-// compare a deployment's compose file against the one sal would produce for it
-// — using the same renderer, so the two cannot drift apart on what a
-// deployment's compose file should look like.
-func renderComposeBytes(l *lab.Lab, stackTag string) ([]byte, error) {
-	secretsDir, err := config.SecretsDir()
-	if err != nil {
-		return nil, err
-	}
-	_, labDockerfile := os.Stat(filepath.Join(l.Dir, "lab", "Dockerfile"))
-
-	var rendered bytes.Buffer
-	if err := compose.Render(&rendered, compose.Data{
-		ProjectName:   l.Name,
-		ProjectDir:    l.ProjectDir,
-		SecretsDir:    secretsDir,
-		StackTag:      stackTag,
-		LabDockerfile: labDockerfile == nil,
-	}); err != nil {
-		return nil, err
-	}
-	return rendered.Bytes(), nil
 }
 
 // collectUpgradeValues prompts only for config a new release added.

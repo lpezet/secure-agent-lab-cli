@@ -36,6 +36,16 @@ const (
 	// BankSubtree holds the provider entries.
 	BankSubtree = "bank"
 
+	// TemplateSubtree holds the deployment's wiring: the service graph, both
+	// networks, the volumes and the mounts. Fetched at the pinned tag and used
+	// VERBATIM — it is parameterised entirely by .env and lab.env, and it
+	// names no provider, so there is nothing for sal to render into it.
+	//
+	// It also names its own tag in every build: line, which is what makes
+	// `sal upgrade` a re-fetch rather than a rewrite. sal carried a copy of
+	// this file until stack 1.12.0 made adopting it possible; see CLAUDE.md.
+	TemplateSubtree = "template/deployment"
+
 	// AddonsSubtree holds the proxy addons every deployment needs regardless
 	// of which providers it installs — including the policy addon that stops
 	// the proxy forwarding to the broker. A deployment without it has a

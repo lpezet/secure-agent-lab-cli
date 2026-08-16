@@ -128,7 +128,16 @@ func runLabsDown(cmd *cobra.Command, names []string, all bool) error {
 		p, known := state[l.Name]
 		fmt.Fprintf(errOut, "\nstopping %s (%s)\n", l.Name, statusOf(p, known))
 
-		r := &compose.Runner{File: l.ComposeFile(), Stdout: cmd.OutOrStdout(), Stderr: errOut}
+		// Named explicitly. The template hardcodes one project name for every
+		// deployment that copies it, so without this each `down` would act on
+		// whichever lab that name currently resolves to — which is exactly the
+		// wrong lab, and stopping the wrong lab is worse than stopping none.
+		r := &compose.Runner{
+			File:    l.ComposeFile(),
+			Project: l.Name,
+			Stdout:  cmd.OutOrStdout(),
+			Stderr:  errOut,
+		}
 		if err := r.Run(cmd.Context(), "down"); err != nil {
 			fmt.Fprintf(errOut, "%s: %v\n", l.Name, err)
 			failed = append(failed, l.Name)

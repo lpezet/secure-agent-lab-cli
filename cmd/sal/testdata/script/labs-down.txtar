@@ -54,6 +54,12 @@ stderr 'stopped 1 lab, 1 of which was running\.'
 # It ran `down` and nothing else. Not `down --volumes`: the audit trail is the
 # record of what the agent did, and this command never destroys it.
 grep '^down .*[/\\]demo-lab[/\\]compose\.yaml$' calls.log
+
+# And it named the project explicitly. The deployment template hardcodes one
+# project name for every deployment copied from it, so without -p every `down`
+# would act on whichever lab that name currently resolves to — which is the
+# wrong lab, and stopping the wrong lab is worse than stopping none.
+grep '^down project:demo-lab$' calls.log
 ! grep 'volumes' calls.log
 
 # There is no --volumes to pass, either. Deleting one trail is a decision;
