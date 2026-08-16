@@ -59,7 +59,6 @@ func Files(name string) ([]File, error) {
 		{Path: "provider.json", Mode: 0o600, Body: manifestBody(name, env)},
 		{Path: filepath.Join("broker", name+".js"), Mode: 0o600, Body: brokerBody(name, env)},
 		{Path: filepath.Join("proxy", name+".py"), Mode: 0o600, Body: proxyBody(name)},
-		{Path: filepath.Join("cred-gateway", name+".conf"), Mode: 0o600, Body: gatewayBody(name)},
 	}, nil
 }
 
@@ -94,12 +93,18 @@ func Write(dir, name string) ([]File, error) {
 // The manifest declares one route that is NOT exposed and one that is, because
 // that pair is the shape of the whole design: the lab may ask for a scoped,
 // short-lived credential and may never reach the route that mints it.
+// The manifest declares ONE route and does not expose it, which is the whole
+// of the static-key shape: a long-lived secret is a reusable secret, and the
+// stack's own rule is that a route handing one over stays unexposed. A
+// skeleton shipping an exposed route would teach the mistake `providers add`
+// refuses. A provider that can mint something short-lived and scoped is a
+// different shape, and gets a different skeleton.
 func manifestBody(name, env string) string {
 	return `{
   "schema_version": 1,
   "name": "` + name + `",
-  "summary": "TODO: one line on what this provider gives the lab",
-  "min_stack": "1.9.0",
+  "summary": "TODO: one line — which credential, for which hosts, and what the lab gets",
+  "min_stack": "1.7.0",
   "load_band": "provider",
   "hosts": ["api.` + name + `.invalid"],
   "secrets": [
@@ -110,92 +115,163 @@ func manifestBody(name, env string) string {
     }
   ],
   "broker_routes": [
-    { "path": "/` + name + `/token", "exposed": false },
-    { "path": "/` + name + `/credential", "exposed": true }
+    { "path": "/` + name + `/cred", "exposed": false }
   ]
 }
 `
 }
 
+// Substitution is deliberate rather than a blanket rename of the word
+// "provider", and the difference is not cosmetic. That word appears in this
+// text as an English noun ("your provider"), as a literal filename
+// (provider.json), as a schema enum value (load_band) and as the KEYWORD of an
+// audit field (provider="x"). Renaming all of them produces prose that reads
+// like nonsense and an audit call whose field is named after the vendor —
+// which changes the shape of the trail rather than its contents.
 func brokerBody(name, env string) string {
-	return `// ` + name + ` — broker provider. Runs on the secure network, holds the
-// long-lived credential, and hands out only what the lab is allowed to have.
-//
-// TODO: everything below is a skeleton. Read PLAYBOOK.md in the stack repo
-// before trusting it — it covers writing a provider from scratch, which is the
-// case a bank of finished entries cannot.
+	return `// Broker side of the static-key shape: hold the long-lived secret, hand it to
+// the proxy, and never to the lab. Reachable only from the proxy on the
+// ` + "`secure`" + ` network — cred-gateway does not whitelist this path, which is what
+// ` + "`" + `"exposed": false` + "`" + ` in provider.json declares.
 const fs = require("fs");
 const { logEvent } = require("../audit");
 
-// The PATH comes from the manifest's secrets[].env, and its value is a path
-// INSIDE the container. Never read a credential from anywhere else, and never
-// log its value — the audit trail records the shape of what happened.
-const TOKEN_PATH = process.env.` + env + `_TOKEN_PATH;
-
-function readToken() {
-  return fs.readFileSync(TOKEN_PATH, "utf8").trim();
+// Returns the file's contents, or null — never "". An empty credential file is
+// absent as far as callers are concerned, and collapsing it here keeps that
+// true for a caller that tests ` + "`" + `!== null` + "`" + ` rather than truthiness.
+function tryReadFile(path) {
+  if (!path) return null;
+  try {
+    const value = fs.readFileSync(path, "utf8").trim();
+    return value || null;
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err;
+  }
 }
 
 module.exports = {
-  routes: {
-    // exposed:false in the manifest, so cred-gateway must NOT whitelist this.
-    // It is where the long-lived credential is used, and a lab that could
-    // reach it would hold a reusable secret.
-    "/` + name + `/token": async (req, res) => {
-      logEvent("token_minted", { provider: "` + name + `" });
-      res.end(JSON.stringify({ token: readToken() }));
-    },
+  // The route keys are the export, not a "routes" object around them: the
+  // broker does Object.assign(routes, require(file)) over every provider file.
+  //
+  // Read fresh on every call rather than cached: it is a local file read, and
+  // it means rotating the credential needs no broker restart. The env var is
+  // the one provider.json declares under secrets[].env, and its value is a
+  // path INSIDE the container — never read a credential from anywhere else.
+  "/` + name + `/cred": async (url, send) => {
+    const token = tryReadFile(process.env.` + env + `_TOKEN_PATH);
+    if (!token) {
+      console.error("[broker] no credential file at ` + env + `_TOKEN_PATH");
+      logEvent("cred_unavailable", { provider: "` + name + `" });
+      return send(500, { error: "no ` + name + ` credential configured" });
+    }
 
-    // exposed:true, so this is what the lab actually calls. TODO: exchange the
-    // long-lived credential for something scoped and short-lived here.
-    "/` + name + `/credential": async (req, res) => {
-      logEvent("credential_issued", { provider: "` + name + `" });
-      res.end(JSON.stringify({ credential: "TODO" }));
-    },
+    // The event records the SHAPE of what happened. Never the value, and never
+    // anything derived from it: observer serves this trail over HTTP.
+    console.log("[broker] issued ` + name + ` credential to proxy");
+    logEvent("cred_issued", { provider: "` + name + `", cred_type: "static_key" });
+    send(200, { type: "static_key", value: token });
   },
 };
 `
 }
 
 func proxyBody(name string) string {
-	return `"""` + name + ` — proxy addon.
+	return `"""Inject a static key for this provider's hosts, and log what was called.
 
-Injects credentials into requests leaving the lab for this provider's hosts,
-so the agent's process never holds one.
+The static-key shape: the broker holds a long-lived secret, this attaches it to
+requests leaving the lab, and the lab never holds it. If your provider can mint
+something short-lived and scoped instead, prefer that — the stack's exposure
+rule is about exactly that difference.
 
-TODO: a skeleton. No NNN prefix here, deliberately: the bank never bakes a slot
-number in, and the installer assigns the lowest free one in the manifest's band.
+No NNN_ prefix on this file: the installer assigns one from the manifest's
+band when it lands in a deployment.
 """
+import requests
+from cachetools import TTLCache
+from mitmproxy import ctx, http
 
 import audit
-from mitmproxy import http
+import hostmatch
 
-# Must agree EXACTLY with the manifest's hosts, both directions: a host
-# declared there and not matched here means the credential is simply never
-# injected, and nothing errors at runtime to say so.
+BROKER_URL = "http://broker:8080"
+
+# TODO: the hosts this provider authenticates to. They must agree EXACTLY with
+# ` + "`hosts`" + ` in provider.json, both directions: a host declared there and not
+# matched here means the credential is silently never injected, and a host
+# matched here but not declared there is an injection the egress allowlist was
+# never seeded for.
 HOSTS = ("api.` + name + `.invalid",)
+
+_cache = TTLCache(maxsize=1, ttl=300)
+
+
+def _get_cred() -> str:
+    """Return the credential from the broker, cached for five minutes."""
+    if "cred" not in _cache:
+        r = requests.get(f"{BROKER_URL}/` + name + `/cred", timeout=5)
+        r.raise_for_status()
+        _cache["cred"] = r.json()["value"]
+    return _cache["cred"]
+
+
+def _endpoint(flow: http.HTTPFlow) -> str:
+    """A loggable identifier for what was called, never the raw path.
+
+    The query string is split off FIRST and only the leading path segments are
+    kept. Both halves matter: flow.request.path includes the query, so an
+    ?access_token= would land in the audit trail that observer serves over
+    HTTP — and keeping two segments bounds the cardinality.
+
+    TODO: if your provider carries its credential IN the path — Telegram's
+    /bot<TOKEN>/<method> is the example that has actually shipped — drop the
+    segments that hold it. Which slice is safe is provider-specific, which is
+    why there is no shared helper for it.
+    """
+    parts = [p for p in flow.request.path.split("?", 1)[0].split("/") if p][:2]
+    return "/" + "/".join(parts)
 
 
 def request(flow: http.HTTPFlow) -> None:
-    if flow.request.pretty_host not in HOSTS:
+    # Do not act on a request an earlier addon has already refused. mitmproxy
+    # calls every addon's request hook regardless, so without this an addon
+    # after a denial still runs: overwriting the refusal message, or — worse —
+    # fetching a credential from the broker and logging cred_injected for a
+    # request that never leaves. Deliberately dependency-free, because
+    # deployments vendor this file at pins that may predate any shared helper.
+    if flow.response is not None:
         return
 
-    # TODO: fetch from the broker and set the header this API expects. The
-    # broker is reachable from the proxy and NOT from the lab.
-    audit.log_event("credential_injected", provider="` + name + `", host=flow.request.pretty_host)
-`
-}
+    # flow.request.host is the real destination. Do NOT use pretty_host: it
+    # prefers the client-supplied Host header, so the lab container could point
+    # a request at its own server, spoof the header, and have the real
+    # credential injected into a request that never goes to the vendor.
+    #
+    # hostmatch normalises case, a trailing root dot and a :port before
+    # comparing. A plain == against a lowercase name is what let
+    # http://BROKER:8080/… through the internal-host block until stack 1.9.2.
+    if not hostmatch.matches(flow.request.host, HOSTS):
+        return
 
-func gatewayBody(name string) string {
-	return `# ` + name + ` — cred-gateway whitelist.
-#
-# ONLY routes the manifest marks exposed:true may appear in this file. A route
-# marked exposed:false that is whitelisted here hands the lab a reusable
-# secret, which is the one mistake in a bank entry that cannot be seen by
-# reading the manifest alone. ` + "`sal providers add`" + ` refuses an entry that does it.
+    # Stripped BEFORE the credential is fetched, not after. _get_cred() raises
+    # when the broker is unreachable, so fetching first means the strip never
+    # runs and the agent's own header goes to the vendor untouched — the
+    # opposite of what the strip is for.
+    #
+    # TODO: name every header this provider authenticates with.
+    for header in ("Authorization", "X-Api-Key"):
+        if header in flow.request.headers:
+            del flow.request.headers[header]
 
-location = /` + name + `/credential {
-  proxy_pass http://broker:8080;
-}
+    # TODO: attach it the way this provider expects.
+    flow.request.headers["Authorization"] = f"Bearer {_get_cred()}"
+
+    ctx.log.info(f"` + name + `: injected credential for {flow.request.method} {_endpoint(flow)}")
+    audit.log_event(
+        "cred_injected",
+        provider="` + name + `",
+        method=flow.request.method,
+        endpoint=_endpoint(flow),
+    )
 `
 }
