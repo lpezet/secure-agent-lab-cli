@@ -64,6 +64,37 @@ func TestTheProxyAddonDecidesOnTheRealHost(t *testing.T) {
 	}
 }
 
+// Stack 1.11.2: mitmproxy calls every addon's request hook whether or not the
+// flow has already been answered. An injection addon running after a denial
+// fetches a credential from the broker and logs cred_injected for a request
+// that never leaves — a trail describing a spend that did not happen, which
+// for this stack is the failure that matters. Every addon that acts on a
+// request now stands aside first, and a scaffold is where the next one starts.
+func TestTheProxyAddonStandsAsideAfterARefusal(t *testing.T) {
+	code := stripComments(render(t, "telegraph")["proxy/telegraph.py"])
+
+	if !strings.Contains(code, "if flow.response is not None:") {
+		t.Error("the addon acts on a request an earlier addon may have already refused")
+	}
+
+	// Scoped to the hook's own body: _get_cred is DEFINED above it, so
+	// searching the whole file would compare a definition against a call and
+	// report an order that is not the one being asserted.
+	_, body, found := strings.Cut(code, "def request(flow: http.HTTPFlow) -> None:")
+	if !found {
+		t.Fatal("no request hook in the scaffolded addon")
+	}
+
+	// First, before the host match and long before the broker is called: the
+	// point is to do nothing at all, not to do less.
+	guard := strings.Index(body, "if flow.response is not None:")
+	for _, later := range []string{"hostmatch.matches", "_get_cred(", "del flow.request.headers"} {
+		if i := strings.Index(body, later); i >= 0 && i < guard {
+			t.Errorf("%s runs before the refusal check", later)
+		}
+	}
+}
+
 // The other thing it got wrong, and the reason it went unnoticed: the broker
 // loads a provider with Object.assign(routes, require(file)), so the export
 // must be the route keys themselves. Wrapping them in a `routes` object
