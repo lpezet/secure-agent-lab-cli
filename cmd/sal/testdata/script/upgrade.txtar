@@ -7,24 +7,24 @@
 cd project
 
 # The plan is reported before anything changes, and names every file.
-exec sal upgrade --to v1.10.0 --stack-dir $WORK/new-stack --dry-run
+exec sal upgrade --to v1.12.0 --stack-dir $WORK/new-stack --dry-run
 stdout '^from\s+v1\.9\.0'
-stdout '^to\s+v1\.10\.0'
+stdout '^to\s+v1\.12\.0'
 stdout 'provider acme \(slot 010, unchanged\)'
 stdout 'rewrite broker/acme\.js'
 stdout 'rewrite proxy/010_acme\.py'
 
 # The deletion is the part that matters most. acme stopped shipping a gateway
-# config at v1.10.0, and a stale one left behind would keep whitelisting a
+# config at v1.12.0, and a stale one left behind would keep whitelisting a
 # route the entry no longer exposes.
-stdout 'DELETE  cred-gateway/acme\.conf \(not shipped at v1\.10\.0\)'
+stdout 'DELETE  cred-gateway/acme\.conf \(not shipped at v1\.12\.0\)'
 
 # THE 1.10.0 change: the proxy image carries the base addons and loads them
 # ahead of the /addons mount, so every one this lab vendors is deleted and none
 # is installed in their place. A copy that survived would read as a control it
 # no longer is — the entrypoint skips it with a warning either way.
-stdout 'DELETE   000_policy\.py \(carried by the proxy image at v1\.10\.0\)'
-stdout 'DELETE   002_retired\.py \(carried by the proxy image at v1\.10\.0\)'
+stdout 'DELETE   000_policy\.py \(carried by the proxy image at v1\.12\.0\)'
+stdout 'DELETE   002_retired\.py \(carried by the proxy image at v1\.12\.0\)'
 ! stdout '^addon\s+000_policy\.py'
 stderr 'nothing was changed'
 
@@ -33,8 +33,8 @@ grep '"stack_tag": "v1.9.0"' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/i
 exists $WORK/.config/secure-agent-lab/labs/demo-lab/cred-gateway/acme.conf
 
 # Now for real.
-exec sal upgrade --to v1.10.0 --stack-dir $WORK/new-stack
-stderr 'upgraded demo-lab to v1\.10\.0'
+exec sal upgrade --to v1.12.0 --stack-dir $WORK/new-stack
+stderr 'upgraded demo-lab to v1\.12\.0'
 
 # The containers are still on the old release until they are rebuilt, and it
 # says so rather than letting someone believe the fix is live.
@@ -44,7 +44,7 @@ stderr 'still running the old one'
 # The slot is unchanged: it is the addon's load order, and load order is a
 # security property.
 exists $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/010_acme.py
-grep 'v1.10.0 addon' $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/010_acme.py
+grep 'v1.12.0 addon' $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/010_acme.py
 
 # The stale files are gone, not merely superseded.
 ! exists $WORK/.config/secure-agent-lab/labs/demo-lab/cred-gateway/acme.conf
@@ -56,8 +56,8 @@ grep 'v1.10.0 addon' $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/010_acme
 ! grep '000_policy' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
 
 # Both records moved: the deployment's, and the project's committable pointer.
-grep '"stack_tag": "v1.10.0"' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
-grep '"stack_tag": "v1.10.0"' .sal/lab.json
+grep '"stack_tag": "v1.12.0"' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
+grep '"stack_tag": "v1.12.0"' .sal/lab.json
 
 # An upgrade builds the record from scratch, so anything it does not carry
 # forward is silently dropped. project_dir is the whole lab→project direction —
@@ -66,15 +66,44 @@ grep '"stack_tag": "v1.10.0"' .sal/lab.json
 # resolved rather than copied from what was there.
 grep '"project_dir"' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
 
+# THE migration, for a lab created before sal fetched the wiring. Every value
+# the template reads by name has to be in .env, and none of its defaults is
+# right for a sal-managed deployment: ${WORKSPACE_DIR:-./workspace} mounts an
+# empty directory INSIDE the deployment rather than the project, and
+# ${AGENT_CREDS_DIR:-$HOME/.config/agent-creds} looks for credentials in the
+# location sal deliberately does not use. Both fail quietly — the lab comes up
+# and does nothing useful.
+grep '^WORKSPACE_DIR=' $WORK/.config/secure-agent-lab/labs/demo-lab/.env
+grep '^AGENT_CREDS_DIR=' $WORK/.config/secure-agent-lab/labs/demo-lab/.env
+grep '^COMPOSE_PROJECT_NAME=demo-lab$' $WORK/.config/secure-agent-lab/labs/demo-lab/.env
+
+# Empty on purpose: the template publishes 127.0.0.1:${OBSERVER_PORT-9000}, and
+# an empty value is what leaves the host port for Docker to assign.
+grep '^OBSERVER_PORT=$' $WORK/.config/secure-agent-lab/labs/demo-lab/.env
+
+# And both env files exist, because the template names them with env_file: and
+# compose refuses a file whose env_file is missing — for the whole project, not
+# just the service that reads it. A lab from before sal wrote lab.env would
+# otherwise upgrade cleanly and then fail every later command.
+exists $WORK/.config/secure-agent-lab/labs/demo-lab/lab.env
+
 # And the compose file was re-rendered, or the lab would rebuild from the old
 # release no matter what the record says.
-grep '#v1.10.0:stack/broker' $WORK/.config/secure-agent-lab/labs/demo-lab/compose.yaml
+grep '#v1.12.0:stack/broker' $WORK/.config/secure-agent-lab/labs/demo-lab/compose.yaml
 ! grep '#v1.9.0:' $WORK/.config/secure-agent-lab/labs/demo-lab/compose.yaml
+
+# The wiring is the template's file, not one sal wrote: it names the release it
+# was fetched at, which is what makes an upgrade a re-fetch rather than a
+# rewrite. The allowlist and lab/Dockerfile arrive with it — and an upgrade
+# never overwrites those two, because they are the operator's egress policy and
+# the one image they build themselves.
+exists $WORK/.config/secure-agent-lab/labs/demo-lab/allowlist
+exists $WORK/.config/secure-agent-lab/labs/demo-lab/lab/Dockerfile
 
 # A provider that cannot make the move refuses the WHOLE upgrade. Half a
 # deployment on each of two releases is a boundary nobody can describe.
 cd $WORK/blocked
-! exec sal upgrade --to v1.10.0 --stack-dir $WORK/new-stack
+! exec sal upgrade --to v1.12.0 --stack-dir $WORK/new-stack
 stderr 'cannot make the move'
 stderr 'needs stack v9\.9\.9'
 stderr 'Nothing has been changed'
@@ -130,11 +159,20 @@ name: blocked-lab
     {"name": "demanding", "slot": 10, "schema_version": 1, "files": ["proxy/010_demanding.py"]}
   ]
 }
+-- new-stack/template/deployment/compose.yaml --
+name: secure-agent-lab
+services:
+  broker:
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.12.0:stack/broker
+-- new-stack/template/deployment/allowlist --
+# Nothing allowed by default.
+-- new-stack/template/deployment/lab/Dockerfile --
+FROM debian:stable-slim
 -- new-stack/bank/acme/provider.json --
 {
   "schema_version": 1,
   "name": "acme",
-  "summary": "At v1.10.0 this entry no longer exposes anything to the lab",
+  "summary": "At v1.12.0 this entry no longer exposes anything to the lab",
   "min_stack": "1.7.0",
   "load_band": "provider",
   "hosts": ["api.acme.example"],
@@ -142,9 +180,9 @@ name: blocked-lab
   "broker_routes": [{"path": "/acme/token", "exposed": false}]
 }
 -- new-stack/bank/acme/broker/acme.js --
-// v1.10.0
+// v1.12.0
 -- new-stack/bank/acme/proxy/acme.py --
-# v1.10.0 addon
+# v1.12.0 addon
 HOSTS = ("api.acme.example",)
 -- new-stack/bank/demanding/provider.json --
 {

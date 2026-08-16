@@ -17,7 +17,7 @@
 #
 #   docker compose version                     availability check
 #   docker compose ls --all --format json      state of every project
-#   docker compose [--profile P]... -f FILE VERB...
+#   docker compose [-p NAME] [--profile P]... -f FILE VERB...
 #   docker ps --filter label=...               containers sal did not start
 #
 # Controlled by environment:
@@ -63,13 +63,18 @@ fi
 [ "$1" = compose ] || exit 1
 shift
 
-# Profiles are global flags, so they arrive before -f. Recorded rather than
-# skipped over: that sal passes them explicitly instead of trusting compose to
-# read .env is a decision worth being able to assert.
+# Global flags arrive before -f. Recorded rather than skipped over: that sal
+# passes the project name and the profiles explicitly, instead of trusting the
+# compose file and .env, is what stops every lab being the same project — and
+# it is a decision worth being able to assert.
 profiles=""
-while [ "$1" = "--profile" ]; do
-	profiles="$profiles $2"
-	shift 2
+project=""
+while true; do
+	case "$1" in
+	--profile) profiles="$profiles $2"; shift 2 ;;
+	-p) project=$2; shift 2 ;;
+	*) break ;;
+	esac
 done
 
 case "$1" in
@@ -90,6 +95,7 @@ ls)
 		# command, and "some call passed --profile observer" is not the same
 		# claim as "the `up` did".
 		[ -n "$profiles" ] && echo "$verb profiles:$profiles" >>"$FAKE_DOCKER_LOG"
+		[ -n "$project" ] && echo "$verb project:$project" >>"$FAKE_DOCKER_LOG"
 	fi
 
 	if [ -n "$FAKE_DOCKER_FAIL" ] && [ "${file#*"$FAKE_DOCKER_FAIL"}" != "$file" ]; then

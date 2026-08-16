@@ -1,0 +1,14 @@
+# Egress allowlist — one entry per line, `domain [METHODS]`.
+#
+# Matching is on label boundaries: *.example.com covers a.example.com and
+# a.b.example.com, but never example.com itself and never evilexample.com.
+# METHODS defaults to GET,HEAD,OPTIONS (safe reads only); use * for all.
+#
+# This file being present is what makes the allowlist enforcing. Delete it and
+# every destination is permitted, with a warning at startup.
+#
+# Nothing is allowed by default. Add what your agent actually needs:
+# api.github.com          GET,POST,PATCH,PUT,DELETE
+# uploads.github.com      POST
+# github.com              *
+# api.anthropic.com       POST

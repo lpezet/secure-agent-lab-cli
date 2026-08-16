@@ -81,6 +81,11 @@ stderr 'enabled and started'
 # reading .env — sal's own behaviour must not depend on that.
 grep '^up profiles: observer$' $WORK/calls.log
 
+# So is the project name, for the same reason and a sharper one: the template
+# names one project for every deployment copied from it, so a lab that did not
+# say which project it is would act on another lab's containers.
+grep '^up project:project-' $WORK/calls.log
+
 # Enabled but not running, in a lab that is up, is the finding worth
 # interrupting for: it is how someone comes to trust an audit trail that
 # nothing is writing.

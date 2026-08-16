@@ -26,6 +26,16 @@ type Runner struct {
 	Stdout, Stderr io.Writer
 	Stdin          io.Reader
 
+	// Project is the compose project name, passed on every invocation.
+	//
+	// The stack's template hardcodes `name: secure-agent-lab`, which is right
+	// for a deployment somebody copies by hand and wrong for a machine running
+	// one lab per project — every lab would be the same compose project, and
+	// `sal labs list` could not tell them apart because there would be nothing
+	// to tell apart. The flag wins over the file, and over COMPOSE_PROJECT_NAME
+	// in .env, which sal also writes so a hand-run compose agrees.
+	Project string
+
 	// Profiles are the compose profiles to enable, passed explicitly on every
 	// invocation rather than left to COMPOSE_PROFILES in the deployment's
 	// .env.
@@ -58,6 +68,9 @@ func Available(ctx context.Context) error {
 
 func (r *Runner) args(rest ...string) []string {
 	args := []string{"compose"}
+	if r.Project != "" {
+		args = append(args, "-p", r.Project)
+	}
 	for _, p := range r.Profiles {
 		args = append(args, "--profile", p)
 	}

@@ -18,7 +18,7 @@ exec sal init --stack-dir $FIXTURES/local-stack
 exec sal providers add widget --stack-dir $FIXTURES/local-stack
 
 exec sal drift --stack-dir $FIXTURES/local-stack
-stdout '^pinned\s+v1\.10\.1'
+stdout '^pinned\s+v1\.12\.0'
 
 # Every file it owns: the bank entry's files and the compose file sal
 # generated. The stack's own proxy addons are NOT among them at 1.10.0 and
@@ -26,7 +26,7 @@ stdout '^pinned\s+v1\.10\.1'
 ! stdout 'proxy/000_policy\.py'
 stdout 'ok\s+proxy/010_widget\.py\s+matches bank/widget/proxy/'
 stdout 'ok\s+broker/widget\.js\s+matches bank/widget/broker/'
-stdout 'ok\s+compose\.yaml\s+matches what sal renders'
+stdout 'ok\s+compose\.yaml\s+matches the template at v1\.12\.0'
 stdout 'summary\s+0 drift · 0 missing · 0 stale · 0 unowned'
 
 # And it says what it did NOT check, because a clean report is exactly when
@@ -41,7 +41,7 @@ stderr 'known list, not a review'
 # is what removes it.
 cd $WORK/vendored
 ! exec sal drift --stack-dir $FIXTURES/local-stack
-stdout 'note\s+proxy/000_policy\.py\s+the proxy image carries this at v1\.10\.1'
+stdout 'note\s+proxy/000_policy\.py\s+the proxy image carries this at v1\.12\.0'
 ! stdout 'MISSING\s+proxy/000_policy\.py'
 ! stdout 'UNOWNED\s+proxy/000_policy\.py'
 
@@ -96,17 +96,19 @@ stdout 'STALE\s+cred-gateway/acme-legacy\.conf'
 # have put an extra .conf in cred-gateway/ is the agent.
 stdout 'UNOWNED\s+cred-gateway/rogue\.conf'
 
-# The generated compose file is compared too. The loopback-only observer
-# publish and the internal lab network both live in it, so an edit there is a
-# change to the boundary no other check would see.
-stdout 'DRIFT\s+compose\.yaml'
+# This lab is pinned below the release whose template sal can read, so its
+# compose file is NOT compared — and says so rather than being silently
+# skipped. There is nothing to compare it against that would mean anything:
+# the file was rendered by an older sal, and a DRIFT line here would be about
+# this repo's history rather than about the deployment.
+stdout 'note\s+compose\.yaml\s+not compared'
 
 # A file in lab/ that sal did not install is NOT reported: that directory is
 # the operator's build context and its Dockerfile is theirs by design.
 ! stdout 'UNOWNED\s+lab/'
 ! stdout 'Dockerfile'
 
-stdout 'summary\s+3 drift · 4 missing · 1 stale · 1 unowned'
+stdout 'summary\s+2 drift · 4 missing · 1 stale · 1 unowned'
 
 # Advice for what was found, and only for that. A wall of advice about things
 # that are fine is how a report stops being read.
@@ -121,9 +123,9 @@ stderr 'no upstream fix reaches them'
 ! exec sal drift --stack-dir $FIXTURES/local-stack --show-diff
 stdout '\+# an edit nobody recorded'
 
-# Including for the compose file, whose reference was rendered rather than
-# fetched — so there is no file on disk to point at.
-stdout '\+# hand-edited'
+# The compose file is not diffed here, because for a lab pinned this far back
+# it is not compared at all — see the note above.
+! stdout '\+# hand-edited'
 
 # ------------------------------------- a record naming an entry that is gone
 #
@@ -147,11 +149,11 @@ a-token-stored-earlier
 -- .config/secure-agent-lab/labs/vendored-lab/compose.yaml --
 name: vendored-lab
 -- vendored/.sal/lab.json --
-{"schema_version": 1, "name": "vendored-lab", "stack_tag": "v1.10.1"}
+{"schema_version": 1, "name": "vendored-lab", "stack_tag": "v1.12.0"}
 -- .config/secure-agent-lab/labs/vendored-lab/.sal/installed.json --
 {
   "schema_version": 1,
-  "stack_tag": "v1.10.1",
+  "stack_tag": "v1.12.0",
   "base_addons": ["000_policy.py"],
   "installed": []
 }
