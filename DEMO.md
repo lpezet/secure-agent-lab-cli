@@ -50,10 +50,6 @@ stack        unknown — this directory has no lab
 Two versions, always. `sal` and the stack are tagged on separate lines: a
 single number could not answer "how far behind is my security boundary?".
 
-The installer says `no stable release yet — installing pre-release v0.1.0` on
-the way past, and means it. Every 0.x release is published as a pre-release
-deliberately, because the design is still settling.
-
 (A binary from `make build` reports `v0.1.0-3-g8bfda02` instead — `git
 describe` keeps the `v` and the commit distance, GoReleaser strips both. Same
 build, different provenance.)
