@@ -524,6 +524,14 @@ func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
 			// whitelisting a route the entry no longer exposes.
 			fmt.Fprintf(out, "  DELETE  %s (not shipped at %s)\n", stale, plan.ToTag)
 		}
+		// Egress moves with the release for the same reason the files do. An
+		// entry that needs a new host at the new release would otherwise
+		// install fine and be denied at runtime; one that stopped needing a
+		// host would keep it permitted, which is the stale grant the DELETE
+		// above exists to prevent, one control over.
+		for _, l := range e.Plan.Egress.Enabled {
+			fmt.Fprintf(out, "  allow   %s\n", l.Text)
+		}
 	}
 	if len(plan.Entries) > 0 {
 		fmt.Fprintln(out)
@@ -556,6 +564,18 @@ func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
 	newRec, err := plan.Apply(l.Dir, secretsDir, values)
 	if err != nil {
 		return err
+	}
+
+	// Rewritten from the new release, replacing each entry's block wholesale:
+	// a destination the entry no longer declares stops being permitted, and
+	// one it has started declaring is granted. Everything outside the blocks
+	// is the operator's egress policy and is not touched — which is why an
+	// upgrade can do this at all, having refused to overwrite the allowlist
+	// as a file.
+	for _, e := range plan.Entries {
+		if err := seedEgress(cmd, l.Dir, e.Plan.Manifest.Name, e.Plan.Egress, false); err != nil {
+			return err
+		}
 	}
 
 	// Set from what was OBSERVED — l.ProjectDir is the directory whose pointer

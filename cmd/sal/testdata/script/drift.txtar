@@ -18,7 +18,7 @@ exec sal init --stack-dir $FIXTURES/local-stack
 exec sal providers add widget --stack-dir $FIXTURES/local-stack
 
 exec sal drift --stack-dir $FIXTURES/local-stack
-stdout '^pinned\s+v1\.12\.0'
+stdout '^pinned\s+v1\.13\.0'
 
 # Every file it owns: the bank entry's files and the compose file sal
 # generated. The stack's own proxy addons are NOT among them at 1.10.0 and
@@ -26,7 +26,7 @@ stdout '^pinned\s+v1\.12\.0'
 ! stdout 'proxy/000_policy\.py'
 stdout 'ok\s+proxy/010_widget\.py\s+matches bank/widget/proxy/'
 stdout 'ok\s+broker/widget\.js\s+matches bank/widget/broker/'
-stdout 'ok\s+compose\.yaml\s+matches the template at v1\.12\.0'
+stdout 'ok\s+compose\.yaml\s+matches the template at v1\.13\.0'
 stdout 'summary\s+0 drift · 0 missing · 0 stale · 0 unowned'
 
 # And it says what it did NOT check, because a clean report is exactly when

@@ -141,5 +141,11 @@ Three layers, none of which needs Docker yet:
 the command grammar, the two JSON formats, exit statuses, and what is
 deliberately not a promise.
 
+`DEMO.md` is a walkthrough with a destination: Claude Code running inside a
+lab, reaching Anthropic through a proxy that holds the credential the agent
+never sees, over an allowlist you wrote, with every request in an audit trail.
+Then the second half — drift, upgrade, features, teardown — is about keeping
+what you built honest.
+
 See `CLAUDE.md` for the decisions behind all of this and the reasoning that
 produced them.
