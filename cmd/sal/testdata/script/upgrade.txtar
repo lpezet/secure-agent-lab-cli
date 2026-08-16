@@ -100,6 +100,38 @@ grep '#v1.12.0:stack/broker' $WORK/.config/secure-agent-lab/labs/demo-lab/compos
 exists $WORK/.config/secure-agent-lab/labs/demo-lab/allowlist
 exists $WORK/.config/secure-agent-lab/labs/demo-lab/lab/Dockerfile
 
+# THE promise `sal drift` makes on this command's behalf. Drift reports a file
+# that differs from the release and says "DRIFT and MISSING are what `sal
+# upgrade` rewrites" — so an upgrade to the release a lab is ALREADY pinned to
+# has to rewrite them, not decline as a no-op.
+#
+# It is the repair path for the finding that matters most: an addon edited by
+# the agent the boundary exists to contain. A remedy that a lab can be too
+# up-to-date to receive is not a remedy.
+cd $WORK/project
+exec sal drift --stack-dir $WORK/new-stack
+stderr 'every file it owns matches'
+
+# Tamper with an addon, the way drift's UNOWNED and DRIFT findings describe.
+cp $WORK/tampered.py $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/010_acme.py
+! exec sal drift --stack-dir $WORK/new-stack
+stdout 'DRIFT\s+proxy/010_acme\.py'
+
+# Same pin, and it still does the work — saying which it is, so nobody reads a
+# reinstall as a move.
+exec sal upgrade --to v1.12.0 --stack-dir $WORK/new-stack
+stderr 'already pinned to v1\.12\.0'
+stderr 'reinstalls every file'
+stdout 'rewrite proxy/010_acme\.py'
+
+# And the finding is gone, which is the whole point. The findings are on
+# stdout and the prose about them on stderr, so a CI step can read one without
+# stripping the other.
+exec sal drift --stack-dir $WORK/new-stack
+stdout 'ok\s+proxy/010_acme\.py'
+stderr 'every file it owns matches'
+grep 'v1.12.0 addon' $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/010_acme.py
+
 # A provider that cannot make the move refuses the WHOLE upgrade. Half a
 # deployment on each of two releases is a boundary nobody can describe.
 cd $WORK/blocked
@@ -200,3 +232,5 @@ HOSTS = ("api.demanding.example",)
 _INTERNAL_HOSTS = {"broker", "cred-gateway"}
 -- new-stack/stack/proxy/addons/001_allowlist.py --
 # inert without /etc/agent-allowlist
+-- tampered.py --
+# an addon edited by something that is not sal
