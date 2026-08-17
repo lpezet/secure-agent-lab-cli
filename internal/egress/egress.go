@@ -279,3 +279,155 @@ func Describe(l Line) string {
 	}
 	return fmt.Sprintf("%-38s (%s)", l.Text, l.Why)
 }
+
+// Unmanaged returns the lines the operator wrote themselves — everything that
+// is not inside any sal block.
+//
+// The distinction is the whole reason blocks exist, and it is what `sal
+// allowlist list` is for: "which of these did I decide, and which arrived with
+// a provider" is not answerable from the file by eye once there are three
+// entries and a few hand-written lines.
+func Unmanaged(path string) ([]Line, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var out []Line
+	inside := false
+	for _, raw := range strings.Split(string(body), "\n") {
+		line := strings.TrimSpace(raw)
+		if _, ok := blockName(line, "# --- sal:"); ok {
+			inside = true
+			continue
+		}
+		if _, ok := blockName(line, "# --- end sal:"); ok {
+			inside = false
+			continue
+		}
+		if inside || line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if l, ok := parseLine(line); ok {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+// Allow adds a destination to the operator's own lines, outside every block.
+//
+// Outside deliberately: a line added here survives `providers remove` and is
+// never rewritten by an upgrade, which is what someone typing it means. Adding
+// INTO a block would produce a grant that vanishes the next time the entry is
+// reinstalled, with nothing to say why.
+//
+// Reports whether it changed anything, so a caller can say "already permitted"
+// rather than implying it did something.
+func Allow(path, host, methods string) (added bool, err error) {
+	text := host
+	if methods != "" {
+		text = fmt.Sprintf("%-24s%s", host, methods)
+	}
+
+	existing, err := Unmanaged(path)
+	if err != nil {
+		return false, err
+	}
+	for _, l := range existing {
+		if l.Host() == host {
+			return false, nil
+		}
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	// Before the first block, so the operator's own policy stays together at
+	// the top rather than being interleaved with whatever was installed last.
+	lines := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	at := len(lines)
+	for i, raw := range lines {
+		if _, ok := blockName(strings.TrimSpace(raw), "# --- sal:"); ok {
+			at = i
+			break
+		}
+	}
+	// Trim blank lines back from the insertion point so repeated calls do not
+	// accumulate gaps.
+	for at > 0 && strings.TrimSpace(lines[at-1]) == "" {
+		at--
+	}
+
+	out := append([]string{}, lines[:at]...)
+	out = append(out, text)
+	if at < len(lines) {
+		out = append(out, "")
+	}
+	out = append(out, lines[at:]...)
+	return true, write(path, strings.Join(out, "\n"))
+}
+
+// ErrManaged means the destination belongs to an installed entry, so removing
+// it here would be undone the next time that entry is written.
+type ErrManaged struct {
+	Host, Owner string
+}
+
+func (e *ErrManaged) Error() string {
+	return e.Host + " is permitted by the " + e.Owner + " entry"
+}
+
+// Deny removes one of the operator's own destinations.
+//
+// It refuses a line inside a block rather than deleting it. Deleting would
+// work until the next `providers add`, `upgrade` or `allowlist reset` put it
+// back — a grant that reappears with nothing to explain it is worse than one
+// that was never removed, and the honest answer is `sal providers remove`.
+func Deny(path, host string) (removed bool, err error) {
+	owned, err := Blocks(path)
+	if err != nil {
+		return false, err
+	}
+	for name, lines := range owned {
+		for _, l := range lines {
+			if l.Host() == host {
+				return false, &ErrManaged{Host: host, Owner: name}
+			}
+		}
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	var out []string
+	inside := false
+	for _, raw := range strings.Split(string(body), "\n") {
+		line := strings.TrimSpace(raw)
+		if _, ok := blockName(line, "# --- sal:"); ok {
+			inside = true
+		} else if _, ok := blockName(line, "# --- end sal:"); ok {
+			inside = false
+		} else if !inside && line != "" && !strings.HasPrefix(line, "#") {
+			if l, ok := parseLine(line); ok && l.Host() == host {
+				removed = true
+				continue
+			}
+		}
+		out = append(out, raw)
+	}
+	if !removed {
+		return false, nil
+	}
+	return true, write(path, strings.Join(out, "\n"))
+}

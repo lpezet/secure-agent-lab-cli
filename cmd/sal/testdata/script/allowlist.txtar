@@ -1,0 +1,136 @@
+# `sal allowlist` — what this lab may reach, and who decided each line.
+#
+# The verbs are on the FILE rather than on the provider: a hand-added line
+# belongs to no entry, so `providers egress` could never describe half of what
+# is in there.
+
+# The deployment is supplied rather than created, so the lab has a name this
+# script can name back — `sal init` derives it from a hash of the project path,
+# which is different on every run.
+cd project
+
+# An empty allowlist is ENFORCING and denies everything, which is the opposite
+# of what an empty listing usually implies — so it is reported as a finding
+# rather than printed as nothing.
+exec sal allowlist list
+! stdout .
+stderr 'permits nothing'
+stderr 'makes the allowlist enforcing'
+
+exec sal providers add widget --stack-dir $FIXTURES/local-stack
+
+# Grouped by who decided it. That question is unanswerable by eye once there
+# are a few entries and a few hand-written lines: the file gives no clue which
+# is which.
+exec sal allowlist list
+stdout '^widget$'
+stdout '^  api\.widget\.example'
+
+# A line of your own goes OUTSIDE every block, which is what makes it yours.
+exec sal allowlist allow operator.test '*'
+stderr 'permitted operator\.test \*'
+exec sal allowlist list
+stdout '^yours$'
+stdout '^  operator\.test'
+
+# Omitting METHODS is not neutral, and the default is the one thing about this
+# file's syntax that is invisible in it: the proxy reads a bare line as
+# GET,HEAD,OPTIONS, so it looks permitted and denies every write.
+exec sal allowlist allow readonly.test
+stderr 'GET,HEAD,OPTIONS'
+stderr 'safe reads only'
+
+# Permitting the same host twice says so rather than writing it again.
+exec sal allowlist allow operator.test '*'
+stderr 'already permitted'
+
+# Yours to remove.
+exec sal allowlist deny readonly.test
+stderr 'denied readonly\.test'
+! stdout 'readonly\.test'
+
+# THE refusal. Deleting an entry's line would work until the next `providers
+# add`, `upgrade` or `allowlist reset` wrote that block again — a grant that
+# reappears with nothing to explain it is worse than one never removed.
+! exec sal allowlist deny api.widget.example
+stderr 'permitted by the widget entry, not by you'
+stderr 'sal providers remove widget'
+
+# And the refusal wrote nothing.
+exec sal allowlist list
+stdout '^  api\.widget\.example'
+
+# ------------------------------------------------------------------- reset
+#
+# The command with a job nothing else has: a lab edited into a state nobody can
+# explain, where the symptom is an agent that cannot reach its vendor and the
+# cause is three edits ago. What an entry's block should hold is answerable
+# exactly, because the entry declares it.
+cp $WORK/mangled $WORK/.config/secure-agent-lab/labs/project-lab/allowlist
+exec sal allowlist list
+stdout '^  api\.widget\.example        GET$'
+
+exec sal allowlist reset --stack-dir $FIXTURES/local-stack
+stdout '^widget$'
+stdout '^  api\.widget\.example        GET,POST$'
+stderr 'sal up'
+
+# Restored — and the operator's own line, which was in that mangled file too,
+# is still there. Everything outside a block is untouched.
+exec sal allowlist list
+stdout '^  api\.widget\.example        GET,POST$'
+stdout '^  mine\.test'
+
+# Resetting again changes nothing, and says so rather than implying work.
+exec sal allowlist reset --stack-dir $FIXTURES/local-stack
+stdout 'unchanged'
+
+# An entry that is not installed is a refusal naming what is, for the same
+# reason `providers remove` does it: a guess here rewrites the wrong block.
+! exec sal allowlist reset nosuchthing --stack-dir $FIXTURES/local-stack
+stderr 'not installed'
+
+# A lab with no providers has nothing to restore, and every line in it is the
+# operator's — said rather than silently doing nothing.
+cd $WORK/bare
+! exec sal allowlist reset --stack-dir $FIXTURES/local-stack
+stderr 'no providers installed'
+stderr 'is yours'
+
+-- project/.sal/lab.json --
+{"schema_version": 1, "name": "project-lab", "stack_tag": "v1.13.1"}
+-- bare/.sal/lab.json --
+{"schema_version": 1, "name": "bare-lab", "stack_tag": "v1.13.1"}
+-- .config/secure-agent-lab/labs/project-lab/compose.yaml --
+name: project-lab
+-- .config/secure-agent-lab/labs/project-lab/allowlist --
+# Nothing is allowed by default.
+-- .config/secure-agent-lab/labs/project-lab/.env --
+COMPOSE_PROJECT_NAME=project-lab
+-- .config/secure-agent-lab/labs/project-lab/lab.env --
+# lab only
+-- .config/secure-agent-lab/labs/project-lab/.sal/installed.json --
+{
+  "schema_version": 1,
+  "stack_tag": "v1.13.1",
+  "base_addons": [],
+  "installed": []
+}
+-- .config/secure-agent-lab/labs/bare-lab/compose.yaml --
+name: bare-lab
+-- .config/secure-agent-lab/labs/bare-lab/allowlist --
+# Nothing is allowed by default.
+-- .config/secure-agent-lab/labs/bare-lab/.sal/installed.json --
+{
+  "schema_version": 1,
+  "stack_tag": "v1.13.1",
+  "base_addons": [],
+  "installed": []
+}
+-- mangled --
+# my own policy
+mine.test               GET
+
+# --- sal:widget --- managed; `sal providers remove widget` removes it
+api.widget.example        GET
+# --- end sal:widget ---

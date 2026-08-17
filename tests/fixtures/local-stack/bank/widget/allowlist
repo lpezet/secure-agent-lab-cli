@@ -1,0 +1,11 @@
+# Widget — egress this entry needs.
+#
+# METHODS is not optional in practice: a line with none defaults to
+# GET,HEAD,OPTIONS, which reads as correct and blocks every write.
+
+api.widget.example        GET,POST
+
+# ---------------------------------------------------------------------------
+# OPTIONAL — nothing below is needed for the provider to work.
+# ---------------------------------------------------------------------------
+# telemetry.widget.example  POST    # usage reporting
