@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "name": "boilerplate",
+  "summary": "TODO: one line — which credential, for which hosts, and what the lab gets",
+  "min_stack": "1.7.0",
+  "load_band": "provider",
+  "hosts": ["api.boilerplate.invalid"],
+  "secrets": [
+    {
+      "env": "BOILERPLATE_TOKEN_PATH",
+      "file": "boilerplate.token",
+      "prompt": "TODO: what to paste, in the words the operator will recognise"
+    }
+  ],
+  "broker_routes": [
+    { "path": "/boilerplate/cred", "exposed": false }
+  ]
+}

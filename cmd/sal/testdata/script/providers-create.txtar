@@ -11,12 +11,12 @@ exec sal init --stack-dir $FIXTURES/local-stack
 
 # A name that is not a valid entry name is refused before anything is written —
 # it is about to become a directory name and a file name.
-! exec sal providers create 'Not A Name'
+! exec sal providers create 'Not A Name' --stack-dir $FIXTURES/local-stack
 stderr 'not a usable entry name'
 
 # The layout is the bank's own, so what you write here can be proposed to the
 # bank unchanged.
-exec sal providers create telegraph
+exec sal providers create telegraph --stack-dir $FIXTURES/local-stack
 stdout 'write    provider\.json'
 stdout 'write    broker[/\\]telegraph\.js'
 stdout 'write    proxy[/\\]telegraph\.py'
@@ -24,6 +24,44 @@ stdout 'write    proxy[/\\]telegraph\.py'
 exists $WORK/.config/secure-agent-lab/providers/telegraph/provider.json
 exists $WORK/.config/secure-agent-lab/providers/telegraph/broker/telegraph.js
 exists $WORK/.config/secure-agent-lab/providers/telegraph/proxy/telegraph.py
+
+# The entry's own egress comes with it (stack 1.13.1), renamed like everything
+# else. Without it a scaffolded entry installs cleanly and has every request
+# denied — which is what that release fixed for the skeleton and 1.13.0 fixed
+# for the bank.
+exists $WORK/.config/secure-agent-lab/providers/telegraph/allowlist
+grep 'api\.telegraph\.invalid        GET,POST' $WORK/.config/secure-agent-lab/providers/telegraph/allowlist
+
+# The placeholder host reads like a real one, and `providers add` seeds
+# whatever is in there — so it is called out rather than left to be noticed.
+stderr 'api\.telegraph\.invalid, which is a placeholder'
+stderr 'defaults to GET,HEAD,OPTIONS'
+
+# THE thing this must not do: hardcode the placeholder. The token is the
+# stack's to choose — it was `__PROVIDER__` in the proposal and shipped as
+# `acme` — so sal reads it out of the skeleton's own manifest. This fixture
+# spells it differently on purpose, and a build that assumed either would leave
+# the fixture's token behind here while still producing valid JSON and valid
+# Python.
+! grep 'boilerplate' $WORK/.config/secure-agent-lab/providers/telegraph/provider.json
+! grep 'boilerplate' $WORK/.config/secure-agent-lab/providers/telegraph/broker/telegraph.js
+! grep 'boilerplate' $WORK/.config/secure-agent-lab/providers/telegraph/proxy/telegraph.py
+grep '"name": "telegraph"' $WORK/.config/secure-agent-lab/providers/telegraph/provider.json
+
+# The UPPER form is a separate substitution and not cosmetic: left behind, the
+# broker reads an environment variable the manifest never declares — installs
+# fine, finds no credential, says nothing.
+grep 'TELEGRAPH_TOKEN_PATH' $WORK/.config/secure-agent-lab/providers/telegraph/provider.json
+grep 'TELEGRAPH_TOKEN_PATH' $WORK/.config/secure-agent-lab/providers/telegraph/broker/telegraph.js
+
+# And the word `provider` NEVER moves. provider.json is a fixed filename,
+# "load_band": "provider" is a schema enum value, and provider= is the audit
+# trail's field NAME rather than its contents — renaming that changes the shape
+# of the trail. An earlier skeleton used `provider` as the placeholder and a
+# tool doing the obvious substitution corrupted all four.
+grep '"load_band": "provider"' $WORK/.config/secure-agent-lab/providers/telegraph/provider.json
+grep 'provider="telegraph"' $WORK/.config/secure-agent-lab/providers/telegraph/proxy/telegraph.py
+grep 'provider: "telegraph"' $WORK/.config/secure-agent-lab/providers/telegraph/broker/telegraph.js
 
 # No cred-gateway config, and nothing exposed. A static key is a REUSABLE
 # secret, and the stack's rule is that a route handing one over stays
@@ -65,7 +103,7 @@ grep 'hostmatch\.matches\(flow\.request\.host' $WORK/.config/secure-agent-lab/pr
 grep '"/telegraph/cred": async \(url, send\)' $WORK/.config/secure-agent-lab/providers/telegraph/broker/telegraph.js
 
 # Scaffolding over your own work is refused rather than merged into.
-! exec sal providers create telegraph
+! exec sal providers create telegraph --stack-dir $FIXTURES/local-stack
 stderr 'already exists'
 
 # A name the bank already has is refused too, before writing: two entries with

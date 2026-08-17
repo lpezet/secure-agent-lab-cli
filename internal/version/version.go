@@ -48,10 +48,12 @@ const MinimumStack = "1.9.2"
 // stale default — then to v1.10.1 once sal could create a deployment shaped
 // the way that release expects (see AddonsBakedFrom), and to v1.12.0 with
 // TemplateFrom, which is also the oldest release a new lab can be created at.
-// It moved to v1.13.0 so a new lab's entries carry the egress they need: below
+// It moved to v1.13.0 so a new lab's entries carry the egress they need — below
 // that release an entry ships no allowlist, installs cleanly, and has every
-// request denied.
-const DefaultStack = "v1.13.0"
+// request denied — and to v1.13.1, which is where the provider SKELETON gained
+// the same file, so an entry somebody scaffolds starts in the same state as one
+// they install.
+const DefaultStack = "v1.13.1"
 
 // AddonsBakedFrom is the first stack release whose proxy IMAGE carries the
 // base addons — 000_policy.py and 001_allowlist.py — at

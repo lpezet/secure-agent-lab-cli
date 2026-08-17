@@ -13,6 +13,8 @@ import (
 
 	"github.com/rogpeppe/go-internal/testscript"
 
+	"github.com/lpezet/secure-agent-lab-cli/internal/version"
+
 	"github.com/lpezet/secure-agent-lab-cli/internal/observer"
 )
 
@@ -50,6 +52,14 @@ func TestScripts(t *testing.T) {
 		},
 		Setup: func(e *testscript.Env) error {
 			e.Setenv("FIXTURES", fixtures)
+
+			// What `sal init` pins to when nobody says otherwise. Exported so
+			// a script can assert the default without spelling the version —
+			// bumping DefaultStack was otherwise a hand-edit across five
+			// assertions in two files, three releases running, and every one
+			// of those edits is a chance to change an assertion that meant a
+			// FIXTURE's pin rather than the default.
+			e.Setenv("DEFAULT_STACK", version.DefaultStack)
 
 			// Where testscript put `sal` itself. A script that needs to
 			// control PATH exactly — to prove sal copes when there is no
