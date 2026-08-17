@@ -1,0 +1,88 @@
+# `sal up` — and the restart that makes every other message in this CLI true.
+#
+# Five messages tell the operator to run `sal up` after changing something in
+# the deployment: `allowlist allow`, `deny` and `reset`, and `providers add`
+# and `remove`. All five are right about what should happen and, until this,
+# named a command that did not do it.
+#
+# Everything a service reads from the deployment arrives through a BIND MOUNT
+# and is read at container start — a broker provider, a proxy addon, a
+# cred-gateway config, a lab_setup fragment, the egress allowlist. So changing
+# one changes the FILE and not the container's config, and `docker compose up`
+# correctly finds nothing to do. The container keeps what it read when it
+# started.
+#
+# It was found the hard way, against a real lab: `sal allowlist allow` said to
+# run `sal up`, `sal up` reported the lab up in 2s, and the proxy went on
+# denying the destination. tests/compose/run.sh pins the compose semantics
+# underneath; this pins what sal does about them.
+
+[windows] skip 'the fake docker is a /bin/sh script'
+
+env PATH=$FIXTURES/fake-docker:$PATH
+env FAKE_DOCKER_LOG=$WORK/calls.log
+
+cd project
+
+# ------------------------------------------------- a lab that is not running
+#
+# Nothing to restart, and nothing said about one. Every container is about to
+# be created and each reads the current files on the way up — a restart here
+# would be pure cost, and a line claiming one would be a lie about work that
+# did not happen.
+exec sal up
+! stderr 'restarted'
+! grep '^restart ' $WORK/calls.log
+
+# ----------------------------------------------------- a lab that is running
+#
+# The services that were already up are restarted, and BEFORE `up` rather than
+# after: `restart` has no --wait of its own, so reporting a lab up while its
+# proxy is still coming back would be the same class of lie this exists to
+# remove. `up --wait` afterwards is what waits for health.
+rm $WORK/calls.log
+env FAKE_DOCKER_RUNNING='broker proxy cred-gateway lab observer log-rotator'
+exec sal up
+stderr 'files at startup'
+grep '^restart ' $WORK/calls.log
+
+# A DENY-list, not an allow-list: everything running is restarted unless it is
+# one of the two services on NEITHER network. A service the stack adds is
+# covered without sal being taught about it, because the direction that must
+# not fail is a boundary file left stale.
+stderr 'restarted broker, cred-gateway, lab, proxy'
+
+# And the two that are skipped. Not tidiness: `docker compose restart`
+# reassigns a host port the compose file left to Docker, and the observer's is
+# left to Docker on purpose — so restarting it for nothing would move the audit
+# trail's URL on every `sal up`. Neither is on a network, so neither can be the
+# one holding a stale boundary file.
+! stderr 'observer,'
+! stderr 'log-rotator'
+
+# The order, which is the half that cannot be seen from the output: of the two
+# verbs that act on containers, `restart` is first.
+exec sh -c 'grep -E "^(restart|up) /" $WORK/calls.log | head -1'
+stdout '^restart '
+
+# ------------------------------------------------------- one service running
+#
+# The answer is not all-or-nothing: a lab part-way up restarts what is up and
+# lets `up` create the rest.
+rm $WORK/calls.log
+env FAKE_DOCKER_RUNNING=proxy
+exec sal up
+stderr 'restarted proxy'
+! stderr 'restarted proxy, '
+
+-- project/.sal/lab.json --
+{"schema_version": 1, "name": "demo-lab", "stack_tag": "v1.13.1"}
+-- .config/secure-agent-lab/labs/demo-lab/compose.yaml --
+name: demo-lab
+-- .config/secure-agent-lab/labs/demo-lab/.env --
+COMPOSE_PROJECT_NAME=demo-lab
+COMPOSE_PROFILES=observer
+-- .config/secure-agent-lab/labs/demo-lab/lab.env --
+# lab only
+-- .config/secure-agent-lab/labs/demo-lab/.sal/installed.json --
+{"schema_version": 1, "stack_tag": "v1.13.1", "base_addons": [], "installed": []}

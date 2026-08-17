@@ -319,18 +319,43 @@ func runUp(cmd *cobra.Command, build bool) error {
 		return err
 	}
 
+	started := time.Now()
+
+	// Asked BEFORE anything starts, because afterwards the distinction is gone:
+	// what needs restarting is a container that was ALREADY up, carrying files
+	// it read at some earlier startup. One compose is about to create reads
+	// them on the way up and must not be restarted for nothing.
+	stale, err := compose.RunningServices(cmd.Context(), r)
+	if err != nil {
+		return err
+	}
+
+	// Restarted before `up`, not after, so that `--wait` below waits for them
+	// to come back healthy. `restart` has no --wait of its own, and reporting a
+	// lab up while its proxy is still starting would be the same class of lie
+	// this whole change exists to remove.
+	if len(stale) > 0 {
+		if err := r.Run(cmd.Context(), append([]string{"restart"}, stale...)...); err != nil {
+			return err
+		}
+	}
+
 	args := []string{"up", "-d", "--wait"}
 	if build {
 		args = append(args, "--build")
 	}
-
-	started := time.Now()
 	if err := r.Run(cmd.Context(), args...); err != nil {
 		return err
 	}
 
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 	fmt.Fprintf(errOut, "\nlab %s up in %s\n", l.Name, time.Since(started).Round(time.Second))
+	if len(stale) > 0 {
+		fmt.Fprintf(errOut, "restarted %s\n"+
+			"          they read the deployment's files at startup, so `up` alone\n"+
+			"          would have left them holding what was there before\n",
+			strings.Join(stale, ", "))
+	}
 
 	// Printed first and unconditionally, because a browser launch fails
 	// silently over SSH, in WSL and inside a dev container.

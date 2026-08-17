@@ -23,10 +23,10 @@ itself — it shells out to `docker compose`.
 > and 13 were run end to end while writing this, against stack v1.12.0, and
 > their output below is real — steps 0, 1, 2 and 10 with a published binary
 > rather than a local build. The steps that start containers — 6 through 9, 11
-> and 14 — are exercised by the test suite against a fake `docker`, and the
-> generated `compose.yaml` is validated by real compose, but that half has not
-> been run end to end against real containers. Expect the sense to be right and
-> a message or two to differ.
+> and 14 — have since been run against real containers on stack v1.14.0, which
+> is what found the `PATH` line in step 5: everything installed, and `sal open
+> claude` exited 127. Their transcripts below are still the fake-`docker` ones,
+> so expect the sense to be right and a message or two to differ.
 
 ---
 
@@ -292,7 +292,27 @@ marking where to add things. Append:
 # "stable", or an exact version. Change the value to force a re-download.
 ARG CLAUDE_VERSION=latest
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}"
+
+# The installer puts it in ~/.local/bin, which the image's PATH does not carry.
+ENV PATH="/root/.local/bin:${PATH}"
 ```
+
+**That `ENV` line is not optional, and the failure it prevents looks like a
+`sal` bug.** The installer lands `claude` in `$HOME/.local/bin`, and the base
+image adds that directory from `/etc/bash.bashrc` — an *interactive shell*
+file. So `sal open` finds it and `sal open claude` does not:
+
+```
+OCI runtime exec failed: exec: "claude": executable file not found in $PATH
+sal: docker compose exec lab claude: exit status 127
+```
+
+`sal open <command>` is `docker compose exec lab <command>` — a bare exec with
+no shell between, which is what makes it honest: it runs what you named, not
+what a shell resolved on your behalf. The cost is that it sees the image's
+`ENV PATH` and nothing else. Anything you install to a directory outside that
+PATH needs saying so in the image, which is where it belongs anyway — a tool
+findable only from an interactive prompt is not really installed.
 
 **Build-time network is the HOST's, not the lab's.** The allowlist governs the
 running container's egress; `docker build` goes out through your machine. So
@@ -439,7 +459,9 @@ sal open claude                # Claude Code, behind the boundary
 ```
 
 `sal open` takes a command, so this execs `claude` directly rather than
-dropping you at a shell first. With no arguments you get a shell instead:
+dropping you at a shell first — which is why step 5 puts `~/.local/bin` on the
+image's `PATH`. If this exits 127 while `sal open` then `claude` works, that
+line is what is missing. With no arguments you get a shell instead:
 
 ```bash
 sal open                       # bash in the lab container

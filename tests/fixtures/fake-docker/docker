@@ -41,7 +41,8 @@
 #                        service has no container, which is how a lab that is
 #                        not running looks
 #   FAKE_DOCKER_RUNNING  space-separated services that `ps --quiet SERVICE`
-#                        reports a container for
+#                        reports a container for, and that
+#                        `ps --services --status running` lists
 #   FAKE_DOCKER_PS       what `docker ps` answers for a label query
 #   FAKE_DOCKER_PS_OURS  what it answers when the query is narrowed to the
 #                        lab's own compose project
@@ -129,6 +130,18 @@ ls)
 		exit 0
 		;;
 	ps)
+		# `ps --services --status running`: which services are up. This is how
+		# `sal up` decides what to RESTART rather than start, so answering it
+		# with silence — which this did, by reading $3 as a service name and
+		# finding `--status` there — makes the restart path unreachable while
+		# every assertion still passes.
+		case "$*" in
+		*--services*)
+			for up in $FAKE_DOCKER_RUNNING; do echo "$up"; done
+			exit 0
+			;;
+		esac
+
 		# `ps --quiet SERVICE`: an id when that service has a container,
 		# nothing when it does not.
 		service=$3
