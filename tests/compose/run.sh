@@ -47,7 +47,13 @@ cat > "$work/compose.yaml" <<'YAML'
 services:
   worker:
     image: busybox:latest
-    command: sleep 600
+    # Reads a bind-mounted file ONCE at startup, which is the shape of every
+    # boundary file in a real deployment: the proxy reads the allowlist and its
+    # addons, the cred-gateway reads gateway.d, the broker reads its providers,
+    # and the lab runs setup.d — all at container start, all through mounts.
+    command: sh -c 'cat /conf; sleep 600'
+    volumes:
+      - ./conf:/conf:ro
   watcher:
     profiles: ["watcher"]
     image: busybox:latest
@@ -55,6 +61,11 @@ services:
     ports:
       - "127.0.0.1::9000"
 YAML
+
+# Written before anything runs: Docker creates a missing bind source as a
+# root-owned DIRECTORY, which is the same reason sal creates lab/setup.d itself
+# rather than letting the mount do it.
+printf 'first\n' > "$work/conf"
 
 compose() { docker compose -p "$project" -f "$work/compose.yaml" "$@"; }
 
@@ -122,6 +133,56 @@ check "ps --quiet answers an id for a running service" \
 url=$(compose port watcher 9000 2>/dev/null)
 check "port answers host:port for a running service" \
 	"$(printf '%s' "$url" | grep -qE '^127\.0\.0\.1:[0-9]+$' && echo 0 || echo 1)"
+
+# -------------------------------------------------- a changed mounted file
+#
+# The three behaviours `sal up` is built on, and the reason it restarts at all.
+# A provider's files and the egress allowlist arrive by bind mount, so changing
+# one changes the FILE and not the container's config — compose finds nothing
+# to do and the running container keeps what it read at startup. Every message
+# in sal that says "run `sal up`" is wrong unless sal closes that itself.
+#
+# Found the hard way: `sal allowlist allow` said to run `sal up`, `sal up`
+# reported the lab up, and the proxy went on denying the destination.
+out=$(compose logs worker 2>/dev/null)
+check "a service reads its bind-mounted file at startup" \
+	"$(printf '%s' "$out" | grep -q 'first' && echo 0 || echo 1)"
+
+printf 'second\n' > "$work/conf"
+compose up -d >/dev/null 2>&1
+out=$(compose logs worker 2>/dev/null)
+check "up does NOT re-read a changed bind-mounted file" \
+	"$(printf '%s' "$out" | grep -q 'second' && echo 1 || echo 0)"
+
+# How sal decides WHAT to restart. Only a service that was already running
+# needs it — one compose has just created read the files on the way up.
+#
+# It names a service behind an ENABLED profile too, which is what sal needs: a
+# feature that is on is as much a running container as any other, and asking a
+# question that skipped it would leave it holding a stale file forever.
+out=$(compose ps --services --status running 2>/dev/null | sort | tr '\n' ' ')
+check "ps --services --status running names every running service" \
+	"$([ "$out" = "watcher worker " ] && echo 0 || echo 1)"
+
+# And the operation itself. Restart rather than --force-recreate on purpose:
+# recreating throws away the container filesystem, so anything an agent
+# installed inside the lab would vanish on an unrelated `sal up`.
+compose restart worker >/dev/null 2>&1
+out=$(compose logs worker 2>/dev/null)
+check "restart DOES re-read it" \
+	"$(printf '%s' "$out" | grep -q 'second' && echo 0 || echo 1)"
+
+# Why `sal up` restarts everything EXCEPT the two services on no network.
+# Docker assigns the host port when the file names none, and it picks a new one
+# on restart — so restarting the observer for nothing moves the audit trail's
+# URL, taking an open browser tab and any `sal observer tail` with it. The
+# services that enforce the boundary have no published port, so they pay
+# nothing for the same operation.
+before=$(compose port watcher 9000 2>/dev/null)
+compose restart watcher >/dev/null 2>&1
+after=$(compose port watcher 9000 2>/dev/null)
+check "restart REASSIGNS a host port the file left to Docker" \
+	"$([ -n "$before" ] && [ -n "$after" ] && [ "$before" != "$after" ] && echo 0 || echo 1)"
 
 # ------------------------------------------------------------------ removal
 #

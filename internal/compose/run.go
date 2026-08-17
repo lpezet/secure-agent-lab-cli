@@ -140,6 +140,67 @@ func (r *Runner) ObserverURL(ctx context.Context) (string, error) {
 	return "http://" + strings.TrimSpace(hostPort), nil
 }
 
+// RunningServices names the services in this deployment that have a container
+// up right now.
+//
+// It exists for one question: what did `sal up` need to RESTART rather than
+// start. Everything a service reads from the deployment — a broker provider, a
+// proxy addon, a cred-gateway config, a lab_setup fragment, the egress
+// allowlist — arrives through a bind mount and is read at container start. So
+// changing one changes the FILE and not the container's config, and compose
+// correctly finds nothing to do: the running container keeps what it read when
+// it started. tests/compose/run.sh pins all three halves of that against the
+// real binary.
+//
+// This is a DENY-list, and deliberately so: a service the stack adds is
+// restarted without sal being taught about it, because the direction that must
+// not fail is a boundary file left stale. Only outsideTheBoundary is skipped.
+//
+// An empty answer is the ordinary case: it means nothing was up, so `up` is
+// about to create every container and each will read the current files.
+func RunningServices(ctx context.Context, r *Runner) ([]string, error) {
+	quiet := *r
+	quiet.Stderr = io.Discard
+
+	out, err := quiet.Output(ctx, "ps", "--services", "--status", "running")
+	if err != nil {
+		// A deployment whose containers cannot be listed is one sal must not
+		// go on to report as up, because the restart it would have skipped is
+		// the difference between the boundary on disk and the one enforced.
+		return nil, fmt.Errorf("cannot tell which services are running: %w", err)
+	}
+
+	var names []string
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" && !outsideTheBoundary[line] {
+			names = append(names, line)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// outsideTheBoundary are the services a restart skips, and the criterion is a
+// stated property of the stack rather than a guess about their code: these two
+// are on NEITHER network, on purpose — they reach the shared audit volume
+// without becoming a channel between the secure side and the lab side. A
+// service on no network enforces no boundary, so it cannot be the one holding
+// a stale boundary file, which is the whole reason to restart anything.
+//
+// Skipping them is not tidiness. `docker compose restart` REASSIGNS a
+// published host port when the compose file names none — and the template
+// publishes the observer as 127.0.0.1::9000 precisely so Docker chooses, which
+// is what makes a collision between two labs impossible. So restarting the
+// observer for no reason moves the audit trail's URL on every `sal up`, taking
+// out an open browser tab and any running `sal observer tail` with it.
+// tests/compose/run.sh pins that behaviour; it was measured, not assumed.
+//
+// Restated from the template, like DefaultProfiles, and carrying the same risk
+// in the same direction: this is the only thing here that can fall behind the
+// stack, and it falls behind SAFELY, because a new service is restarted unless
+// it is named here.
+var outsideTheBoundary = map[string]bool{"observer": true, "log-rotator": true}
+
 // Project is one compose project as `docker compose ls` reports it.
 type Project struct {
 	Name        string

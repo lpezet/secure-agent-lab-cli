@@ -408,6 +408,43 @@ deliberately does not use). `OBSERVER_PORT` is set EMPTY on purpose — the
 template publishes `127.0.0.1:${OBSERVER_PORT-9000}`, and empty is what leaves
 the port for Docker to assign.
 
+**`sal up` RESTARTS what was already running, because `docker compose up` does
+not.** Every boundary file in a deployment — a broker provider, a proxy addon,
+a cred-gateway config, a `lab_setup` fragment, the egress allowlist — arrives
+through a bind mount and is read at container start. So changing one changes
+the *file* and not the container's config, and compose correctly finds nothing
+to do: the running container keeps what it read when it started.
+
+Five messages already told the operator to run `sal up` after changing one, and
+all five were right about what should happen. The command was what was wrong.
+It surfaced as `sal allowlist allow` reporting a destination permitted, `sal up`
+reporting the lab up, and the proxy going on denying it — and it is worse after
+`providers remove`, where the cred-gateway keeps whitelisting a route that is
+gone. Fixing the wording instead would have left the operator responsible for
+knowing that mounted config is not re-read, which is precisely the knowledge
+this tool exists to hold. A `--restart` flag is the same mistake with a longer
+name: the default stays broken and forgetting the flag leaves the boundary
+wide.
+
+Restarted **before** `up`, not after, so `--wait` waits for health — `restart`
+has none of its own, and reporting a lab up while its proxy is still coming
+back is the same class of lie. `restart` rather than `--force-recreate`,
+because recreating discards the container filesystem and would throw away
+whatever an agent installed in the lab on an unrelated `sal up`.
+
+**The skip list is a DENY-list of exactly two, and the criterion is the network
+graph.** `observer` and `log-rotator` are on **neither** network on purpose, so
+neither enforces anything and neither can be the one holding a stale boundary
+file. Everything else running is restarted, including a service the stack adds
+later that `sal` has never heard of — the restatement can only fall behind in
+the safe direction. Skipping those two is not tidiness: `docker compose
+restart` **reassigns a published host port the compose file left to Docker**,
+and the observer's is left to Docker precisely so two labs cannot collide — so
+restarting it for nothing would move the audit trail's URL on every `sal up`,
+taking an open browser tab and any running `sal observer tail` with it. All of
+it is measured in `tests/compose/run.sh` rather than assumed, including the
+premise: that `up` does not re-read a changed mounted file.
+
 **The compose project name is passed with `-p` on every invocation**, and
 written to `.env` as `COMPOSE_PROJECT_NAME` as well. The template hardcodes
 `name: secure-agent-lab`, which is right for a deployment somebody copies by
