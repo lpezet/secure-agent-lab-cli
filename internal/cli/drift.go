@@ -101,7 +101,13 @@ func runDrift(cmd *cobra.Command, showDiff bool) error {
 		return err
 	}
 
-	expected, unresolved, owned := expectedFiles(b, local, addonsDir, l.Dir, rec)
+	// Every third-party source an installed entry names, opened once and kept
+	// alive for the whole comparison — the Expected list points into these
+	// trees.
+	sources, closeSources := openInstalledSources(cmd, rec)
+	defer closeSources()
+
+	expected, unresolved, owned := expectedFiles(b, local, sources, addonsDir, l.Dir, rec)
 
 	report, err := drift.Check(l.Dir, expected, owned)
 	if err != nil {
@@ -155,7 +161,7 @@ func runDrift(cmd *cobra.Command, showDiff bool) error {
 // resolved at all, and the paths those entries own — which must still count as
 // accounted for, or an entry sal cannot read would have all of its files
 // reported as if somebody smuggled them in.
-func expectedFiles(b, local *bank.Bank, addonsDir, deployDir string, rec *deployment.Record) ([]drift.Expected, []drift.Finding, []string) {
+func expectedFiles(b, local *bank.Bank, sources map[string]*bank.Bank, addonsDir, deployDir string, rec *deployment.Record) ([]drift.Expected, []drift.Finding, []string) {
 	var (
 		expected   []drift.Expected
 		unresolved []drift.Finding
@@ -216,6 +222,26 @@ func expectedFiles(b, local *bank.Bank, addonsDir, deployDir string, rec *deploy
 		if e.Source == deployment.SourceLocal {
 			from, where = local, "your providers/"+e.Name
 		}
+		// A third-party entry is compared against its own source at the commit
+		// recorded when it was installed — a different tree again, which is
+		// the reason `source` is recorded rather than derived. A source that
+		// was removed, or cannot be reached, leaves the entry unresolved below
+		// rather than being compared against the bank, where a same-named
+		// entry would make a foreign file look correct.
+		//
+		// The trees come from the caller and are alive for the whole
+		// comparison. They were opened here once, with a `defer tree.Close()`
+		// beside them — which deleted the extracted tree when THIS function
+		// returned, while every Expected still pointed into it. The comparison
+		// then failed on a missing file with no findings at all, which reads
+		// as a broken lab rather than a broken tool.
+		if name, ok := deployment.SourceName(e.Source); ok {
+			if third, ok := sources[name]; ok && third != nil {
+				from, where = third, name+"/"+e.Name
+			} else {
+				from, where = nil, "source "+name
+			}
+		}
 
 		plan, err := planFrom(from, e, rec.StackTag)
 		if err != nil {
@@ -258,6 +284,10 @@ func expectedFiles(b, local *bank.Bank, addonsDir, deployDir string, rec *deploy
 // an entry that is no longer there.
 func planFrom(b *bank.Bank, e deployment.Entry, stackTag string) (*installer.Plan, error) {
 	if b == nil {
+		if name, ok := deployment.SourceName(e.Source); ok {
+			return nil, fmt.Errorf("the %s source cannot be read — it may have been removed with "+
+				"`sal providers source remove`, or its ref may be gone", name)
+		}
 		return nil, fmt.Errorf("there is no providers directory to read it from")
 	}
 	return installer.BuildPlanAt(b, e.Name, e.Slot, stackTag)
@@ -281,6 +311,9 @@ func localBank() (*bank.Bank, error) {
 func sourceWord(e deployment.Entry) string {
 	if e.Source == deployment.SourceLocal {
 		return "your providers directory"
+	}
+	if name, ok := deployment.SourceName(e.Source); ok {
+		return "the " + name + " source"
 	}
 	return "the bank at this release"
 }
@@ -376,5 +409,40 @@ func explainFindings(errOut io.Writer, report *drift.Report, tag string) {
 		fmt.Fprintf(errOut, "UNOWNED files arrived some other way than `sal init` or `sal providers add`.\n"+
 			"sal will not touch them, and no upstream fix reaches them — check they are\n"+
 			"yours before assuming they are.\n")
+	}
+}
+
+// openInstalledSources opens the bank of every third-party source this
+// deployment installed from, at the commit each entry recorded.
+//
+// A source that cannot be opened is recorded as nil rather than omitted, so
+// the difference between "not a third-party entry" and "a third-party entry
+// whose source is gone" survives — the second is a finding and the first is
+// not.
+func openInstalledSources(cmd *cobra.Command, rec *deployment.Record) (map[string]*bank.Bank, func()) {
+	out := map[string]*bank.Bank{}
+	var trees []*bank.Tree
+
+	for _, e := range rec.Installed {
+		name, ok := deployment.SourceName(e.Source)
+		if !ok {
+			continue
+		}
+		if _, seen := out[name]; seen {
+			continue
+		}
+		_, tree, b, _, err := openTrustedSource(cmd, name, e.SourceCommit)
+		if err != nil {
+			out[name] = nil
+			continue
+		}
+		out[name] = b
+		trees = append(trees, tree)
+	}
+
+	return out, func() {
+		for _, t := range trees {
+			t.Close()
+		}
 	}
 }

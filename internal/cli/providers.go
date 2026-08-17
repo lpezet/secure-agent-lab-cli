@@ -21,6 +21,7 @@ import (
 	"github.com/lpezet/secure-agent-lab-cli/internal/prompt"
 	"github.com/lpezet/secure-agent-lab-cli/internal/secrets"
 	"github.com/lpezet/secure-agent-lab-cli/internal/skeleton"
+	srcpkg "github.com/lpezet/secure-agent-lab-cli/internal/source"
 	"github.com/lpezet/secure-agent-lab-cli/internal/version"
 )
 
@@ -36,6 +37,7 @@ func newProvidersCmd() *cobra.Command {
 		newProvidersListCmd(),
 		newProvidersAddCmd(),
 		newProvidersCreateCmd(),
+		newProvidersSourceCmd(),
 		newProvidersRemoveCmd(),
 	)
 	return group
@@ -83,14 +85,20 @@ func runProvidersInstalled(cmd *cobra.Command) error {
 		return nil
 	}
 
+	// ORIGIN is not decoration. The bank's entries were reviewed by whoever
+	// maintains it and nothing else here was, so "where did this code come
+	// from" is a question worth being able to answer about a lab rather than
+	// one to reconstruct from shell history. It is also unrecoverable from the
+	// files: two entries called `slack` from two sources are identical on
+	// disk.
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSLOT\tSCHEMA\tFROM")
+	fmt.Fprintln(w, "NAME\tSLOT\tSCHEMA\tSTACK\tORIGIN")
 	for _, e := range rec.Installed {
 		from := e.StackTag
 		if from == "" {
 			from = rec.StackTag
 		}
-		fmt.Fprintf(w, "%s\t%03d\t%d\t%s\n", e.Name, e.Slot, e.SchemaVersion, from)
+		fmt.Fprintf(w, "%s\t%03d\t%d\t%s\t%s\n", e.Name, e.Slot, e.SchemaVersion, from, originWord(e))
 	}
 	return w.Flush()
 }
@@ -235,6 +243,26 @@ func runProvidersAdd(cmd *cobra.Command, name string, dryRun, noEgress bool) err
 	}
 	defer tree.Close()
 
+	// `entry@source` installs from a source this machine has been told to
+	// trust. ALWAYS qualified, never resolved from a bare name: a bare name
+	// that searched added sources would mean adding one could silently change
+	// what an existing name installs, which is the ambiguity the whole
+	// registry exists to prevent.
+	entryName, sourceName := srcpkg.Qualified(name)
+	sourceCommit := ""
+	if sourceName != "" {
+		st, tree, thirdParty, at, err := openTrustedSource(cmd, sourceName, "")
+		if err != nil {
+			return err
+		}
+		defer tree.Close()
+		name, b, sourceCommit = entryName, thirdParty, at
+		fmt.Fprintf(errOut, "installing %s from %s, which you added as %q.\n"+
+			"Nobody has reviewed it but whoever wrote it: every check sal has still runs, and\n"+
+			"none of them can tell whether the broker provider hands the lab more than it should.\n\n",
+			entryName, st, sourceName)
+	}
+
 	// An entry the operator wrote themselves is installed from their own
 	// providers directory. Which one this is has to be decided here, because
 	// it is also what gets recorded — the two are indistinguishable afterwards
@@ -242,6 +270,11 @@ func runProvidersAdd(cmd *cobra.Command, name string, dryRun, noEgress bool) err
 	source, b, err := resolveSource(b, name)
 	if err != nil {
 		return err
+	}
+	if sourceName != "" {
+		// The registry's answer wins: resolveSource only distinguishes bank
+		// from local, and neither is what this is.
+		source = deployment.SourceFrom(sourceName)
 	}
 	if source == deployment.SourceLocal {
 		fmt.Fprintf(errOut, "installing %s from your own providers directory, not from the bank at %s.\n"+
@@ -297,6 +330,11 @@ func runProvidersAdd(cmd *cobra.Command, name string, dryRun, noEgress bool) err
 		return err
 	}
 	entry.Source = source
+	// The commit the source was read at, so a later `sal drift` compares
+	// against what was installed rather than against whatever that ref points
+	// at today. The same reason the deployment records the stack's commit
+	// beside its tag.
+	entry.SourceCommit = sourceCommit
 	rec.Installed = append(rec.Installed, *entry)
 	if err := deployment.Save(l.Dir, rec); err != nil {
 		return err
@@ -849,4 +887,23 @@ func scaffoldSource(cmd *cobra.Command) (tag, commit string, err error) {
 	}
 	commit, err = bank.DefaultSource().ResolveTag(cmd.Context(), tag)
 	return tag, commit, err
+}
+
+// originWord names where an entry came from, in the words `providers add`
+// used at the time.
+func originWord(e deployment.Entry) string {
+	switch {
+	case e.Source == deployment.SourceLocal:
+		return "yours"
+	case e.Source == deployment.SourceBank:
+		return "bank"
+	default:
+		if name, ok := deployment.SourceName(e.Source); ok {
+			return name
+		}
+		// A record written by a build that knew a source kind this one does
+		// not. Printed rather than flattened to "bank", which would be a claim
+		// about review that nothing checked.
+		return e.Source
+	}
 }
