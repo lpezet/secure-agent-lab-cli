@@ -357,11 +357,25 @@ func runProvidersAdd(cmd *cobra.Command, name string, dryRun, noEgress bool) err
 	// Honest about a gap rather than quietly leaving a file nothing reads.
 	for _, f := range plan.Files {
 		if strings.HasPrefix(f.Dst, "lab/") {
-			fmt.Fprintf(errOut, "\nnote: %s was installed but is NOT sourced automatically. The stack's\n"+
-				"      lab_setup mechanism assumes the deployment sits inside the workspace, and\n"+
-				"      here it deliberately does not. Run it yourself with:\n"+
-				"        docker compose -f %s exec lab bash /workspace/../%s\n",
-				f.Dst, l.ComposeFile(), f.Dst)
+			// The command here PIPES the fragment in rather than naming a path
+			// inside the container, because there is no such path: the lab
+			// service mounts only the proxy CA and the workspace, so a file in
+			// the deployment's lab/ is in the build context and nowhere else.
+			// This note used to suggest `exec lab bash /workspace/../lab/x.sh`,
+			// which resolves to /lab/x.sh and does not exist — a workaround for
+			// a silent gap that itself failed. See stack #107.
+			// Generic on purpose, and the invariants test caught the first
+			// draft naming an entry to make the point vivid. What the fragment
+			// does is the entry's business; that it is REQUIRED, and what is
+			// at stake when it does not run, is sal's.
+			fmt.Fprintf(errOut, "\nnote: %s was installed and NOTHING RUNS IT. The entry ships it because the\n"+
+				"      provider needs it: a fragment can be what keeps a tool on the proxied path\n"+
+				"      at all, so without it the provider may install cleanly and never be\n"+
+				"      mediated. The deployment mounts only /proxy-certs and /workspace, so the\n"+
+				"      file is not reachable inside the container. Run it by piping it in:\n"+
+				"        docker compose -p %s -f %s exec -T lab bash -s < %s\n"+
+				"      Tracked upstream as secure-agent-lab#107.\n",
+				f.Dst, l.Name, l.ComposeFile(), filepath.Join(l.Dir, filepath.FromSlash(f.Dst)))
 		}
 	}
 	return nil
