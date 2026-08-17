@@ -1,0 +1,82 @@
+# compose.override.yaml — how a deployment's wiring is customised.
+#
+# `compose.yaml` is fetched verbatim and REWRITTEN by `sal upgrade`, so editing
+# it is drift and is lost on the next upgrade. That made "change the wiring"
+# look impossible when only the first file is off limits: compose layers files
+# natively, so a second one sal never writes is the operator's to do anything
+# with — another mount, a different command, an extra service.
+#
+# Named for what `docker compose` picks up by default, so a compose run by hand
+# in the deployment behaves the way `sal up` does.
+
+[windows] skip 'the fake docker is a /bin/sh script'
+
+env PATH=$FIXTURES/fake-docker:$PATH
+env FAKE_DOCKER_LOG=$WORK/calls.log
+
+cd project
+
+# Without one, a single -f. Nothing changes for a deployment that has none.
+exec sal up
+grep 'up files:.*compose\.yaml$' $WORK/calls.log
+# Matched narrowly: testscript names $WORK after the script, so every logged
+# path contains the word "override" and a loose pattern would pass for the
+# wrong reason.
+! grep 'files:.*compose\.override\.yaml' $WORK/calls.log
+
+# With one, both files — and the override SECOND, because later wins and that
+# ordering is the whole behaviour rather than a detail.
+cp $WORK/override.yaml $WORK/.config/secure-agent-lab/labs/demo-lab/compose.override.yaml
+rm $WORK/calls.log
+exec sal up
+grep 'up files:.*compose\.yaml .*compose\.override\.yaml$' $WORK/calls.log
+
+# Every command that drives compose gets it, not just `up` — a lab that came up
+# with an extra mount and is inspected without it would answer about a
+# different deployment.
+rm $WORK/calls.log
+exec sal down
+grep 'down files:.*compose\.override\.yaml$' $WORK/calls.log
+
+# ------------------------------------------------------------------- drift
+#
+# It is the operator's, so it is not compared. But its EXISTENCE is reported:
+# a clean line about compose.yaml would otherwise say the wiring is what the
+# release ships, when a second file can change any of it — the loopback-only
+# observer publish, the internal lab network and every mount all live in what
+# an override can reach.
+# The deployment's wiring has to actually be the release's, or the note is
+# reported next to a DRIFT finding and says nothing about whether an override
+# is treated as one.
+cp $FIXTURES/local-stack/template/deployment/compose.yaml $WORK/.config/secure-agent-lab/labs/demo-lab/compose.yaml
+exec sal drift --stack-dir $FIXTURES/local-stack
+stdout 'note\s+compose\.override\.yaml\s+yours, layered over the wiring and not compared'
+stdout 'ok\s+compose\.yaml'
+
+# A note is not a finding: a lab with an override is not drifting, and a drift
+# check in CI must not fail because somebody customised their own deployment.
+stdout 'summary\s+0 drift'
+
+# And an upgrade does not touch it, the same way it leaves the allowlist and
+# lab/Dockerfile alone — those are the three files in a deployment that belong
+# to whoever runs it.
+exec sal upgrade --to v1.13.1 --stack-dir $FIXTURES/local-stack
+grep 'mine' $WORK/.config/secure-agent-lab/labs/demo-lab/compose.override.yaml
+
+-- project/.sal/lab.json --
+{"schema_version": 1, "name": "demo-lab", "stack_tag": "v1.13.1"}
+-- override.yaml --
+# mine
+services:
+  lab:
+    environment:
+      EXTRA: "yes"
+-- .config/secure-agent-lab/labs/demo-lab/compose.yaml --
+name: demo-lab
+-- .config/secure-agent-lab/labs/demo-lab/.env --
+COMPOSE_PROJECT_NAME=demo-lab
+COMPOSE_PROFILES=observer
+-- .config/secure-agent-lab/labs/demo-lab/lab.env --
+# lab only
+-- .config/secure-agent-lab/labs/demo-lab/.sal/installed.json --
+{"schema_version": 1, "stack_tag": "v1.13.1", "base_addons": [], "installed": []}

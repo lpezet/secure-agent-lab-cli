@@ -641,6 +641,37 @@ An empty allowlist is reported as a finding rather than printed as an empty
 list, because empty here means ENFORCING and denying everything — the opposite
 of what an empty listing usually implies.
 
+**A `lab_setup` fragment goes in `lab/setup.d/<name>.sh`, and from stack
+1.14.0 something runs it.** Below that release there was nowhere to: the lab
+mounted only the proxy CA and the workspace, its command was `sleep infinity`,
+and a fragment sal installed sat in the build context unread — so the two bank
+entries that ship one installed and did not work.
+
+NOT `lab/` itself, which is the build context and holds `Dockerfile` and
+`entrypoint.sh`: a `*.sh` glob there would run the entrypoint inside itself.
+Written to `setup.d/` at every release, including below the line where nothing
+reads it, because a path that varied by pin is one `drift` and `upgrade` would
+both have to reason about — and a lab created below it then already has its
+fragments in the right place when it upgrades.
+
+`sal` creates that directory rather than letting Docker create the bind source,
+which would make it root-owned and unwritable by any later `providers add` —
+the same reason the secrets directory is created deliberately.
+
+**`lab/entrypoint.sh` is the mechanism, so `upgrade` REWRITES it**, alongside
+the compose file — a deployment carrying an old copy would silently stop
+running fragments a newer release expects to run. It is also OPTIONAL below
+1.14.0, since the template did not ship one: treating every template file as
+required made `sal init --stack v1.13.1` fail on a file that release never had.
+
+**`lab/Dockerfile` stays the operator's, and that is the migration trap.** A lab
+created before 1.14.0 upgrades into a state where the entrypoint is present, the
+fragments are in place, the compose file mounts them — and the image still never
+runs any of it, because their Dockerfile has no `ENTRYPOINT`. Everything looks
+installed and the provider does not work, which is the failure the mechanism was
+added to end. sal cannot rewrite that file, so it warns and prints the four
+lines to add.
+
 **Removing a provider never deletes a credential.** Reinstalling the provider
 undoes the removal; deleting a credential undoes nothing, and the two are
 different decisions. The paths are printed so `rm` is one line away for someone

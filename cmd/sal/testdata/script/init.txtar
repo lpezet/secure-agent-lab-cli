@@ -113,6 +113,9 @@ services:
 # Nothing allowed by default.
 -- hollow-stack/template/deployment/lab/Dockerfile --
 FROM debian:stable-slim
+-- hollow-stack/template/deployment/lab/entrypoint.sh --
+#!/usr/bin/env bash
+exec "$@"
 -- nested/.sal/lab.json --
 {"schema_version": 1, "name": "outer-lab", "stack_tag": "v1.9.0"}
 -- nested/project/.keep --

@@ -353,6 +353,17 @@ func compareCompose(cmd *cobra.Command, l *lab.Lab, rec *deployment.Record, comm
 		}
 		return err
 	}
+	// An override is the operator's and is not compared — but its EXISTENCE is
+	// reported, because a clean line about compose.yaml would otherwise say
+	// the wiring is what the release ships when a second file may have changed
+	// any of it. Everything drift checks this file for lives in what an
+	// override can reach: the loopback-only observer publish, the internal lab
+	// network, every mount.
+	if o := overrideFile(l.Dir); o != "" {
+		report.Add(drift.Finding{Kind: drift.Note, Path: overrideName,
+			Detail: "yours, layered over the wiring and not compared — it can change anything below"})
+	}
+
 	if string(want) == string(have) {
 		report.Add(drift.Finding{Kind: drift.OK, Path: lab.ComposeName, Detail: "matches the template at " + stackTag})
 		return nil

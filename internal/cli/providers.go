@@ -356,13 +356,24 @@ func runProvidersAdd(cmd *cobra.Command, name string, dryRun, noEgress bool) err
 
 	// Honest about a gap rather than quietly leaving a file nothing reads.
 	for _, f := range plan.Files {
-		if strings.HasPrefix(f.Dst, "lab/") {
-			fmt.Fprintf(errOut, "\nnote: %s was installed but is NOT sourced automatically. The stack's\n"+
-				"      lab_setup mechanism assumes the deployment sits inside the workspace, and\n"+
-				"      here it deliberately does not. Run it yourself with:\n"+
-				"        docker compose -f %s exec lab bash /workspace/../%s\n",
-				f.Dst, l.ComposeFile(), f.Dst)
+		if !strings.HasPrefix(f.Dst, "lab/") {
+			continue
 		}
+		// From the release that runs them, this is not worth a word: the
+		// fragment is mounted and the entrypoint executes it. Below it there
+		// is nowhere to run one, and the entry that shipped it does not work
+		// without it — so say so, rather than leaving a file nothing reads.
+		if version.StackRunsSetupFragments(rec.StackTag) {
+			fmt.Fprintf(errOut, "\nsetup    %s runs on the next `sal up` (restart, not rebuild)\n", f.Dst)
+			continue
+		}
+		fmt.Fprintf(errOut, "\nnote: %s was installed and NOTHING RUNS IT at stack %s. The entry ships it\n"+
+			"      because the provider needs it, so this provider is installed and not\n"+
+			"      working. Somewhere to run it arrived in v%s — `sal upgrade` moves this\n"+
+			"      lab there. Until then, run it by piping it in:\n"+
+			"        docker compose -p %s -f %s exec -T lab bash -s < %s\n",
+			f.Dst, rec.StackTag, version.SetupFragmentsFrom, l.Name, l.ComposeFile(),
+			filepath.Join(l.Dir, filepath.FromSlash(f.Dst)))
 	}
 	return nil
 }

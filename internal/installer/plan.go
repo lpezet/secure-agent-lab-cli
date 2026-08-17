@@ -31,6 +31,20 @@ const (
 	proxyDir   = "proxy"
 	gatewayDir = "cred-gateway"
 	labDir     = "lab"
+
+	// setupDir is where a lab_setup fragment goes, from stack 1.14.0: the
+	// deployment mounts ./lab/setup.d read-only at /etc/agent-setup.d and the
+	// lab entrypoint executes what is in it.
+	//
+	// NOT ./lab itself, which is the build context and holds the Dockerfile
+	// and entrypoint.sh — a *.sh glob there would run the entrypoint inside
+	// itself. Mirrors cred-gateway/gateway.d/ for the same reason.
+	//
+	// Written at every release, including below 1.14.0 where nothing runs it:
+	// the alternative is a path that varies by pin, which drift and upgrade
+	// would both have to reason about, and a lab created below the line then
+	// already has its fragments in place when it upgrades.
+	setupDir = "lab/setup.d"
 )
 
 // egressFile is the entry's own allowlist, from stack 1.13.0. Not one of the
@@ -189,7 +203,8 @@ func assemble(m *manifest.Manifest, entryDir string, slot int) (*Plan, error) {
 		// Named per entry rather than kept as setup.sh: several providers each
 		// shipping "lab/setup.sh" would otherwise overwrite one another.
 		candidates = append(candidates, candidate{
-			filepath.Join(entryDir, filepath.FromSlash(m.LabSetup)), filepath.Join(labDir, m.Name+".sh"), 0o755,
+			filepath.Join(entryDir, filepath.FromSlash(m.LabSetup)),
+			filepath.Join(filepath.FromSlash(setupDir), m.Name+".sh"), 0o755,
 		})
 	}
 
