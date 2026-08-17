@@ -49,3 +49,11 @@ git@github.com:
 # check would go quiet without anyone deciding it should. The host is named in
 # the four prefixes above instead, and every message interpolates the first of
 # them.
+
+# The hosting service's conventional token variables, read by internal/source
+# so a private providers repository works with the credential the operator
+# already has. Same test as the prefixes above: both would be equally true if
+# the bank were empty, and neither is looked up or branched on for a provider.
+# Every message and test interpolates these two rather than spelling them out.
+GITHUB_TOKEN
+GH_TOKEN

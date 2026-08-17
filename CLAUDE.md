@@ -491,14 +491,36 @@ source at the recorded commit and names it in the finding; a source that was
 removed leaves the entry UNRESOLVED rather than being compared against the
 bank, where a same-named entry would make a foreign file look correct.
 
-**Public repositories only, and that is a deferral rather than a limit.** A
-private repository is the case that matters most — the providers an
-organisation most wants to share are the ones it cannot publish — and it needs
-a token, which is its own decision on a tool whose entire subject is not
-handling credentials carelessly. Reading one from the environment is the
-obvious answer and is exactly the exposure `secrets set` refuses; shelling out
-to `gh` adds the dependency that fetching over HTTPS was chosen to avoid.
-Neither is decided, so neither is implemented.
+**A private source uses whatever credential the operator already has**, and
+this is NOT in tension with `sal secrets set` refusing a value in argv. That
+rule was briefly read as "sal must never touch a credential", which is the
+wrong reading and produced a deferral that made private repositories — the case
+that matters most, since what an organisation most wants to share is what it
+cannot publish — impossible for no benefit.
+
+The rule is about what a credential DOES. A provider credential is stored on
+disk, mounted into the broker and injected into the agent's traffic: it is the
+thing the boundary exists to protect, and the reasons argv is unacceptable for
+it are all about persistence and exposure to processes the agent can reach.
+A token for reading a providers repository authenticates one HTTPS GET made by
+the operator's own tool, on the operator's own machine, with the operator's own
+authority. It is never stored, never mounted, and never crosses into the lab —
+`git clone` would use the same credential. The boundary is around the lab, and
+`sal` is host-side and outside it.
+
+So: `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token`. Explicit before
+ambient, because when both exist the environment variable is what the operator
+typed for this run while the keychain is whoever they logged in as months ago.
+The token goes on the request header and nowhere else — never into
+`sources.json`, which is a list of names and repositories with none of the mode
+discipline the secrets directory has, and never into a URL, where it would
+reach proxy logs and any error that quotes it.
+
+Two consequences worth stating. A private repository answers **404 exactly as a
+missing one does**, so "check your spelling" is the wrong first guess and the
+error says which credential was used or that none was found. And `sal drift`
+reads sources too, so a CI step checking a lab with a private source needs a
+token available or every one of its entries becomes an unresolved finding.
 
 **`providers source remove` does not touch what was installed.** Untrusting a
 source sounds like it should revoke what came from it, which is why the command

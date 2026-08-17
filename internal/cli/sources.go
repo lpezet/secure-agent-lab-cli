@@ -90,7 +90,13 @@ func runSourceAdd(cmd *cobra.Command, repoArg, as, ref string) error {
 	// of something else.
 	entries, err := sourceEntries(cmd, s)
 	if err != nil {
-		return fmt.Errorf("cannot read %s: %w.\nNothing was recorded", s, err)
+		// A private repository you cannot see and a repository that does not
+		// exist are the same 404, deliberately, so GitHub does not confirm
+		// what is there. That makes "check your spelling" the wrong first
+		// guess for anyone pointing at their own org's repo — so which
+		// credential was used, or that none was found, is part of the error.
+		return fmt.Errorf("cannot read %s: %w.\n%s\nNothing was recorded",
+			s, err, credentialNote(cmd))
 	}
 
 	if err := source.Save(dir, reg); err != nil {
@@ -109,7 +115,30 @@ func runSourceAdd(cmd *cobra.Command, repoArg, as, ref string) error {
 	fmt.Fprintf(errOut, "\nWhat this trusts: an entry from here runs behind your credential boundary, and\n"+
 		"its broker provider decides what the lab is handed. sal checks what is visible in\n"+
 		"the files and cannot check that.\n")
+	if from := srcToken(cmd); from != "" {
+		// Which credential, never the credential. Worth saying because a
+		// private source silently starts working the day someone exports a
+		// token, and stops the day CI does not have one — and `sal drift`
+		// reads this source too.
+		fmt.Fprintf(errOut, "\nRead with the credential from %s. sal does not store it: anything that fetches\n"+
+			"this source — including `sal drift` in CI — needs one available.\n", from)
+	}
 	return nil
+}
+
+// srcToken names where a token came from, or empty when there is none.
+func srcToken(cmd *cobra.Command) string { return source.TokenSource(cmd.Context()) }
+
+// credentialNote says which credential was used, or that none was found, for
+// an error that is otherwise indistinguishable from a typo.
+func credentialNote(cmd *cobra.Command) string {
+	if from := srcToken(cmd); from != "" {
+		return "Read with the credential from " + from + ", so this is not a missing token —\n" +
+			"check the owner/repo, and that this identity can see it."
+	}
+	return "No credential was found, and a private repository answers 404 exactly as a\n" +
+		"missing one does. Export $" + source.EnvVars[0] + ", or log in with `gh auth login`,\n" +
+		"if this repository is not public."
 }
 
 func newSourceListCmd() *cobra.Command {
@@ -212,7 +241,7 @@ func sourceEntries(cmd *cobra.Command, s source.Source) ([]string, error) {
 // `sal drift` passes it back here.
 func openSourceBank(cmd *cobra.Command, s source.Source, commit string) (*bank.Bank, *bank.Tree, string, error) {
 	opts := bankOptions(cmd)
-	opts.Source = s.BankSource()
+	opts.Source = s.BankSource(cmd.Context())
 
 	// --stack-dir points at a stack checkout, which is not this repository.
 	// Ignored here rather than reading the wrong bank.
@@ -220,7 +249,12 @@ func openSourceBank(cmd *cobra.Command, s source.Source, commit string) (*bank.B
 
 	if commit == "" {
 		var err error
-		commit, err = s.BankSource().ResolveTag(cmd.Context(), s.Ref)
+		// ResolveRef, not ResolveTag: a source's ref may be a branch, and
+		// `main` is this flag's own default. ResolveTag rejects anything that
+		// is not vX.Y.Z, which is right for the stack and was wrong here —
+		// `providers source add owner/repo` failed on its own default until
+		// somebody ran it without --ref.
+		commit, err = opts.Source.ResolveRef(cmd.Context(), s.Ref)
 		if err != nil {
 			return nil, nil, "", err
 		}
