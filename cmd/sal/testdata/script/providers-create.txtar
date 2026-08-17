@@ -25,6 +25,18 @@ exists $WORK/.config/secure-agent-lab/providers/telegraph/provider.json
 exists $WORK/.config/secure-agent-lab/providers/telegraph/broker/telegraph.js
 exists $WORK/.config/secure-agent-lab/providers/telegraph/proxy/telegraph.py
 
+# The entry's own egress comes with it (stack 1.13.1), renamed like everything
+# else. Without it a scaffolded entry installs cleanly and has every request
+# denied — which is what that release fixed for the skeleton and 1.13.0 fixed
+# for the bank.
+exists $WORK/.config/secure-agent-lab/providers/telegraph/allowlist
+grep 'api\.telegraph\.invalid        GET,POST' $WORK/.config/secure-agent-lab/providers/telegraph/allowlist
+
+# The placeholder host reads like a real one, and `providers add` seeds
+# whatever is in there — so it is called out rather than left to be noticed.
+stderr 'api\.telegraph\.invalid, which is a placeholder'
+stderr 'defaults to GET,HEAD,OPTIONS'
+
 # THE thing this must not do: hardcode the placeholder. The token is the
 # stack's to choose — it was `__PROVIDER__` in the proposal and shipped as
 # `acme` — so sal reads it out of the skeleton's own manifest. This fixture

@@ -471,9 +471,16 @@ func runProvidersCreate(cmd *cobra.Command, name string) error {
 		"Read PLAYBOOK.md in the stack repo — it covers writing one from scratch, which\n"+
 		"is what you are about to do. Then `sal providers add %s --dry-run` runs every\n"+
 		"check sal has against it without writing anything.\n", manifest.Filename, name)
-	fmt.Fprintf(errOut, "\nThe %s shape at stack %s. It ships no allowlist, so nothing is permitted\n"+
-		"for it until you add one — see any bank entry's own `allowlist` for the shape.\n",
-		skeleton.Shape, tag)
+	fmt.Fprintf(errOut, "\nThe %s shape at stack %s.\n", skeleton.Shape, tag)
+	// The allowlist is the file most likely to be skimmed and the only one
+	// whose placeholder is not obviously a placeholder: `api.<name>.invalid`
+	// reads like a hostname, and `providers add` will seed it into the
+	// deployment's allowlist verbatim. Everything else here has TODO in it.
+	if _, err := os.Stat(filepath.Join(dir, allowlistName)); err == nil {
+		fmt.Fprintf(errOut, "The `allowlist` names api.%s.invalid, which is a placeholder rather than a\n"+
+			"host — `sal providers add %s` seeds whatever is in there. State the METHODS:\n"+
+			"a line without them defaults to GET,HEAD,OPTIONS and denies every write.\n", name, name)
+	}
 	return nil
 }
 

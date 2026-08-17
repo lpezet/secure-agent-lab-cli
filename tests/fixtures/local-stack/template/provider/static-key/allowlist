@@ -1,0 +1,11 @@
+# Egress this entry needs — rename `api.boilerplate.invalid` with everything else.
+#
+# It exists because your provider does not work without it: the proxy denies
+# every destination this file does not name.
+
+api.boilerplate.invalid        GET,POST        # TODO: your host, and the methods it needs
+
+# ---------------------------------------------------------------------------
+# OPTIONAL — anything the provider works without ships commented out.
+# ---------------------------------------------------------------------------
+# telemetry.boilerplate.invalid  POST    # usage reporting; the client works without it
