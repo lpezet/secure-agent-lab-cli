@@ -15,6 +15,7 @@
 package source
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -198,10 +199,16 @@ func DefaultName(repo string) string {
 }
 
 // BankSource is how this source is fetched: the same code path the stack's own
-// bank goes through, pointed at a different repository.
-func (s Source) BankSource() *bank.Source {
+// bank goes through, pointed at a different repository and carrying whatever
+// credential the operator already has.
+//
+// The token is attached here rather than stored: it never reaches
+// sources.json, which is a list of names and repositories and has none of the
+// mode discipline the secrets directory does.
+func (s Source) BankSource(ctx context.Context) *bank.Source {
 	src := bank.DefaultSource()
 	src.Owner, src.Repo = s.Owner, s.Repo
+	src.Token = Token(ctx)
 	return src
 }
 

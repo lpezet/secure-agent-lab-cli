@@ -1,6 +1,7 @@
 package source
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,5 +182,84 @@ func TestARegistryWithNoGenerationIsRefused(t *testing.T) {
 	}
 	if _, err := Load(dir); err == nil {
 		t.Error("a registry declaring no generation was read anyway")
+	}
+}
+
+// The flag's own default has to work. `--ref main` was rejected by the pattern
+// that guards a STACK tag, which is right for the stack — a security boundary
+// is pinned to releases on purpose — and wrong for a source, where a branch is
+// an ordinary answer. Shipped broken, and caught by running the command with
+// no flags at all.
+func TestARefMayBeABranch(t *testing.T) {
+	src := Source{Name: "acme", Owner: "acme", Repo: "lab", Ref: "main"}.BankSource(context.Background())
+
+	for _, ok := range []string{"main", "master", "release/1.13", "v1.0.0", "a", "feature_x-2"} {
+		if _, err := src.ResolveRef(context.Background(), ok); err != nil && strings.Contains(err.Error(), "not a usable ref") {
+			t.Errorf("ResolveRef(%q) refused a legitimate ref: %v", ok, err)
+		}
+	}
+}
+
+// Still a control, not a formality: the ref goes straight into a request path.
+func TestARefCannotCarryAPathEscape(t *testing.T) {
+	src := Source{Name: "acme", Owner: "acme", Repo: "lab", Ref: "main"}.BankSource(context.Background())
+
+	for _, bad := range []string{
+		"../../etc", "main/..", "..", "main?x=1", "main#frag", "/main", "main/",
+		"main with space", "", "-main",
+	} {
+		_, err := src.ResolveRef(context.Background(), bad)
+		if err == nil || !strings.Contains(err.Error(), "not a usable ref") {
+			t.Errorf("ResolveRef(%q) was not refused by the pattern: %v", bad, err)
+		}
+	}
+}
+
+// The token is attached to the request and never written down. Anything that
+// put it in sources.json would be a secret in a config file with none of the
+// mode discipline the secrets directory has.
+func TestTheTokenNeverReachesTheRegistry(t *testing.T) {
+	t.Setenv(EnvVars[0], "ghp-not-a-real-token")
+
+	dir := t.TempDir()
+	r := &Registry{}
+	if err := r.Add(Source{Name: "acme", Owner: "acme", Repo: "lab", Ref: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(dir, r); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := os.ReadFile(Path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "ghp-not-a-real-token") {
+		t.Fatalf("the token was written to the registry:\n%s", body)
+	}
+
+	// And it IS on the fetcher, or a private source could not be read at all.
+	if got := r.Sources[0].BankSource(context.Background()).Token; got != "ghp-not-a-real-token" {
+		t.Errorf("token = %q, want the one in the environment", got)
+	}
+}
+
+// Explicit before ambient. When both exist, the environment variable is the one
+// the operator typed for this run; the keychain is whatever they logged in as
+// months ago, and silently preferring it would make the first look ignored.
+func TestAnExplicitTokenWinsOverTheAmbientOne(t *testing.T) {
+	t.Setenv(EnvVars[0], "from-env")
+	t.Setenv(EnvVars[1], "from-gh-env")
+
+	if got := Token(context.Background()); got != "from-env" {
+		t.Errorf("Token() = %q, want the value of the first variable", got)
+	}
+	if got := TokenSource(context.Background()); got != "$"+EnvVars[0] {
+		t.Errorf("TokenSource() = %q", got)
+	}
+
+	// Reporting names the variable, never the value — this string is printed.
+	if strings.Contains(TokenSource(context.Background()), "from-env") {
+		t.Error("TokenSource leaked the token itself")
 	}
 }
