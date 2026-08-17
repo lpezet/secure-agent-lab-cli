@@ -337,27 +337,47 @@ Claude Code misbehaves as a detached container entrypoint.
 ## 6. Open the egress allowlist
 
 The lab starts able to reach **nothing**. That is the right default and a
-surprising one, so `init` says so — but it is still the step people forget.
+surprising one, so `init` says so.
+
+You do not have to work out what Anthropic needs, because the entry declared
+it: `providers add` in step 3 already wrote the destinations it requires, and
+printed them. Check who decided what:
 
 ```bash
-$EDITOR ~/.config/secure-agent-lab/labs/my-agent-project-082ce7bb/allowlist
+sal allowlist list
 ```
 
-One entry per line, `domain [METHODS]`. For Claude Code, one line is enough:
+```
+anthropic
+  api.anthropic.com       GET,POST
+  platform.claude.com     GET
+```
 
-```
-api.anthropic.com       POST
+Both are required, and the second is the one nobody would guess: Claude Code
+calls `platform.claude.com/v1/oauth/hello` before it will run and treats
+failing it as fatal. It is in the allowlist and deliberately **not** in the
+entry's `hosts` — it answers unauthenticated, so it is a host the agent must
+*reach*, not one your credential is attached to. Reachable and credentialed are
+two different lists that happen to overlap.
+
+Only what the entry left **uncommented** is written. Its optional destinations
+— telemetry, error reporting — are the vendor's suggestion and stay off until
+you turn them on, which is yours to type.
+
+Add what else *your* agent needs, which belongs to you rather than to any
+entry:
+
+```bash
+sal allowlist allow api.github.com GET,POST,PATCH,PUT,DELETE
+sal allowlist allow github.com '*'
 ```
 
-That is the only host the `anthropic` entry declares, and the addon matches
-exactly it — the proxy injects your credential into requests going there and
-nowhere else. Add what else your agent needs; a repo-working agent usually
-wants GitHub too:
-
-```
-api.github.com          GET,POST,PATCH,PUT,DELETE
-github.com              *
-```
+Those land outside every managed block, which is what makes them yours: they
+survive `sal providers remove`, and no upgrade rewrites them. `sal allowlist
+list` groups them under `yours`. You can still edit the file directly —
+`~/.config/secure-agent-lab/labs/my-agent-project-082ce7bb/allowlist`, one
+entry per line, `domain [METHODS]` — and anything outside a marked block is
+never touched.
 
 Matching is on label boundaries: `*.example.com` covers `a.example.com` and
 `a.b.example.com`, never `example.com` itself and never `evilexample.com`.
@@ -389,6 +409,23 @@ Six services come up: `broker`, `proxy`, `cred-gateway`, `observer`,
 `internal: true`, so the proxy is the only way out. `observer` and
 `log-rotator` are on **neither**, on purpose: they reach the shared audit
 volume without becoming a channel between the two sides.
+
+`sal up` is also what you run after changing anything in the deployment — a
+provider added or removed, a line allowed or denied. Every one of those files
+is mounted into a container that read it **at startup**, so `docker compose up`
+on its own would find nothing to do and leave the boundary as it was. `sal up`
+restarts what was already running and says which:
+
+```
+restarted broker, cred-gateway, lab, proxy
+          they read the deployment's files at startup, so `up` alone
+          would have left them holding what was there before
+```
+
+`observer` and `log-rotator` are not in that list, for the same reason they are
+on no network: they enforce nothing, so neither can be the one holding a stale
+boundary file — and restarting the observer would move the audit trail's URL,
+since Docker assigns that port.
 
 ```bash
 sal labs list
