@@ -61,6 +61,23 @@ func TestScripts(t *testing.T) {
 			// FIXTURE's pin rather than the default.
 			e.Setenv("DEFAULT_STACK", version.DefaultStack)
 
+			// No script may reach the network, and this is what makes that
+			// structural rather than a convention every script has to
+			// remember. Every command that reads stack content takes
+			// --stack-dir; one that forgets it silently downloads instead, and
+			// passes on a developer's machine while failing in CI. That is
+			// exactly how it broke: `sal providers create` started fetching
+			// the skeleton, and the one call in drift.txtar without the flag
+			// went green locally and red on the runner.
+			//
+			// An unroutable proxy rather than a flag sal reads, so nothing in
+			// the production path knows it is under test. Go's
+			// ProxyFromEnvironment does not proxy localhost, so the observer
+			// tests still talk to their own loopback server.
+			for _, v := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+				e.Setenv(v, "http://127.0.0.1:1")
+			}
+
 			// Where testscript put `sal` itself. A script that needs to
 			// control PATH exactly — to prove sal copes when there is no
 			// browser launcher anywhere on it, say — has to keep this entry
