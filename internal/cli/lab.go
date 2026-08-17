@@ -153,13 +153,16 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 	// is fixed by which tag it was fetched at — and `sal upgrade` is the same
 	// fetch at a new one.
 	newLab := &lab.Lab{Name: name, Dir: labDir, ProjectDir: projectDir}
-	if _, err := installTemplate(cmd, newLab, commit, everyTemplateFile()); err != nil {
+	if _, err := installTemplate(cmd, newLab, stackTag, commit, everyTemplateFile()); err != nil {
 		return err
 	}
 
 	// Both start empty and are filled by `sal providers add` from manifests.
 	// Compose requires the files to exist, and keeping them separate is what
 	// stops the lab container receiving the broker's environment.
+	if err := ensureSetupDir(labDir); err != nil {
+		return err
+	}
 	if err := ensureEnvFiles(labDir); err != nil {
 		return err
 	}
@@ -207,6 +210,7 @@ func runInit(cmd *cobra.Command, stackTag string) error {
 	fmt.Fprintf(out, "addons   carried by the proxy image at %s, not vendored here\n", stackTag)
 
 	warnAboutTheAllowlist(cmd, newLab)
+	warnIfEntrypointNotWired(cmd, newLab, stackTag)
 
 	fmt.Fprintf(errOut, "\nNext: `sal providers add <name>` to give it a credential path, then `sal up`.\n"+
 		"The first `sal up` builds five images from the stack repo and takes a few minutes.\n")
@@ -398,6 +402,7 @@ func runnerFor(cmd *cobra.Command) (*lab.Lab, *compose.Runner, error) {
 	}
 	return l, &compose.Runner{
 		File:     l.ComposeFile(),
+		Override: overrideFile(l.Dir),
 		Project:  l.Name,
 		Stdout:   cmd.OutOrStdout(),
 		Stderr:   cmd.ErrOrStderr(),
@@ -598,9 +603,13 @@ func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
 	if err := ensureEnvFiles(l.Dir); err != nil {
 		return err
 	}
+	if err := ensureSetupDir(l.Dir); err != nil {
+		return err
+	}
 	if err := backfillProfiles(l.Dir); err != nil {
 		return err
 	}
+	warnIfEntrypointNotWired(cmd, l, plan.ToTag)
 
 	// And the values the template reads by name. A lab created before sal
 	// fetched the template has none of them, and every default in that file is
@@ -620,7 +629,10 @@ func runUpgrade(cmd *cobra.Command, to string, dryRun bool) error {
 	// lab/Dockerfile is the one image they build themselves — an upgrade that
 	// rewrote either would throw away their work to apply a change to
 	// something else.
-	if _, err := installTemplate(cmd, l, toCommit, map[string]bool{composeName: true}); err != nil {
+	// The entrypoint moves with the release for the same reason the compose
+	// file does: it is the mechanism that runs each provider's lab_setup
+	// fragment, not something the operator wrote.
+	if _, err := installTemplate(cmd, l, plan.ToTag, toCommit, map[string]bool{composeName: true, labEntrypoint: true}); err != nil {
 		return err
 	}
 	if err := deployment.Save(l.Dir, newRec); err != nil {

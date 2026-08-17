@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/lpezet/secure-agent-lab-cli/internal/config"
 	"github.com/lpezet/secure-agent-lab-cli/internal/envfile"
 	"github.com/lpezet/secure-agent-lab-cli/internal/lab"
+	"github.com/lpezet/secure-agent-lab-cli/internal/stackver"
+	"github.com/lpezet/secure-agent-lab-cli/internal/version"
 )
 
 // The deployment's wiring comes from the stack repo, fetched at the pinned
@@ -38,6 +41,7 @@ const (
 	composeName    = lab.ComposeName
 	allowlistName  = "allowlist"
 	labDockerfile  = "lab/Dockerfile"
+	labEntrypoint  = "lab/entrypoint.sh"
 	projectNameVar = "COMPOSE_PROJECT_NAME"
 )
 
@@ -47,16 +51,34 @@ const (
 // the project it works on, and sal's project lives outside the deployment
 // entirely — it is mounted in by path. README.md and .env.example describe the
 // copy-it-yourself flow, which is not the flow a sal-managed lab is in.
-var templateFiles = []string{composeName, allowlistName, labDockerfile}
+var templateFiles = []string{composeName, allowlistName, labDockerfile, labEntrypoint}
+
+// optionalBefore names a template file that only exists from some release, and
+// which release. A file missing below its line is not an error — the template
+// simply did not have it yet — while one missing at or above it is, because
+// then the release is not the shape sal expects.
+//
+// TemplateFrom is 1.12.0 and the entrypoint arrived in 1.14.0, so labs pinned
+// in between are real. Treating every template file as required made `sal init
+// --stack v1.13.1` fail on a file that release never shipped.
+var optionalBefore = map[string]string{labEntrypoint: version.SetupFragmentsFrom}
 
 // installTemplate writes the wiring into a deployment.
 //
 // overwrite says which files a caller is prepared to replace. On `init` that is
-// all of them; on `upgrade` it is the compose file alone — the allowlist is the
-// operator's egress policy and lab/Dockerfile is the one image they build
-// themselves, so an upgrade that rewrote either would throw away work in order
-// to apply a change to something else.
-func installTemplate(cmd *cobra.Command, l *lab.Lab, commit string, overwrite map[string]bool) ([]string, error) {
+// all of them; on `upgrade` it is the compose file and the lab entrypoint — the
+// allowlist is the operator's egress policy and lab/Dockerfile is the one image
+// they build themselves, so an upgrade that rewrote either would throw away
+// work in order to apply a change to something else.
+//
+// The entrypoint is the mechanism rather than the operator's: it is what runs
+// each installed provider's lab_setup fragment, and a deployment carrying an
+// older copy of it would silently stop running fragments a newer release
+// expects to run. Same argument as the compose file.
+//
+// A file ABSENT is written whatever `overwrite` says, which is what makes this
+// a migration as well as an install.
+func installTemplate(cmd *cobra.Command, l *lab.Lab, tag, commit string, overwrite map[string]bool) ([]string, error) {
 	tree, err := bank.FetchTree(cmd.Context(), commit, bank.TemplateSubtree, bankOptions(cmd))
 	if err != nil {
 		return nil, fmt.Errorf("cannot obtain the deployment template, without which there is no lab to create: %w", err)
@@ -70,6 +92,9 @@ func installTemplate(cmd *cobra.Command, l *lab.Lab, commit string, overwrite ma
 
 		body, err := os.ReadFile(src)
 		if err != nil {
+			if from, optional := optionalBefore[rel]; optional && !atLeastStack(tag, from) {
+				continue
+			}
 			return nil, fmt.Errorf("the template at this release has no %s: %w", rel, err)
 		}
 		if _, err := os.Stat(dst); err == nil && !overwrite[rel] {
@@ -186,4 +211,87 @@ func ensureEnvFiles(labDir string) error {
 		}
 	}
 	return nil
+}
+
+// overrideName is the operator's own compose file, layered over the release's.
+const overrideName = "compose.override.yaml"
+
+// overrideFile returns the deployment's override if it has one.
+//
+// This exists because "the wiring is fetched verbatim" was being read as "the
+// wiring cannot be changed", which was never true and was sal's constraint
+// rather than the stack's. compose.yaml is rewritten by `sal upgrade` and
+// compared by `sal drift`, so editing it is drift and is lost — but compose
+// layers files natively, and a second one that sal never writes is the
+// operator's to do anything with: another mount, a different command, an extra
+// service.
+//
+// Named for what compose itself would pick up by default, so a `docker compose
+// up` run by hand in the deployment behaves the way `sal up` does.
+func overrideFile(labDir string) string {
+	path := filepath.Join(labDir, overrideName)
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return path
+}
+
+// ensureSetupDir creates the directory a lab_setup fragment goes in.
+//
+// Created by sal rather than left to Docker: the deployment bind-mounts
+// ./lab/setup.d, and Docker creating a missing bind source makes it ROOT-owned
+// — a directory no later `sal providers add` could write a fragment into, on a
+// path sal owns. Same reasoning as the secrets directory.
+func ensureSetupDir(labDir string) error {
+	return os.MkdirAll(filepath.Join(labDir, filepath.FromSlash(setupSubdir)), 0o700)
+}
+
+// setupSubdir mirrors internal/installer's setupDir. Restated rather than
+// exported because the installer's copy is what decides where a fragment is
+// WRITTEN, and this one only makes sure the directory is there first — two
+// statements of one path, which a test holds together.
+const setupSubdir = "lab/setup.d"
+
+// warnIfEntrypointNotWired says when a deployment's own Dockerfile predates the
+// mechanism that runs setup fragments.
+//
+// lab/Dockerfile belongs to the operator and sal never rewrites it — which is
+// right, and which means a lab created before 1.14.0 upgrades into a state
+// where the entrypoint is present, the fragments are in place, the compose file
+// mounts them, and the image still never runs any of it. Everything looks
+// installed and the provider does not work, which is the exact failure the
+// mechanism was added to end.
+func warnIfEntrypointNotWired(cmd *cobra.Command, l *lab.Lab, tag string) {
+	if !version.StackRunsSetupFragments(tag) {
+		return
+	}
+	body, err := os.ReadFile(filepath.Join(l.Dir, filepath.FromSlash(labDockerfile)))
+	if err != nil || strings.Contains(string(body), "entrypoint.sh") {
+		return
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"\nwarning: %s does not use the lab entrypoint, so no provider's setup fragment\n"+
+			"         will run in it. That file is yours and sal does not rewrite it. Add:\n\n"+
+			"           COPY entrypoint.sh /entrypoint.sh\n"+
+			"           RUN chmod +x /entrypoint.sh\n"+
+			"           ENTRYPOINT [\"/entrypoint.sh\"]\n"+
+			"           CMD [\"sleep\", \"infinity\"]\n\n"+
+			"         then `sal up --build`. Compare against lab/Dockerfile in the stack's\n"+
+			"         template at %s for the current shape.\n",
+		filepath.Join(l.Dir, filepath.FromSlash(labDockerfile)), tag)
+}
+
+// atLeastStack reports whether a stack tag is at or above a release. A tag it
+// cannot parse counts as ABOVE, so an unrecognised pin gets the current shape
+// of the template rather than silently skipping a file the release ships.
+func atLeastStack(tag, from string) bool {
+	have, err := stackver.Parse(tag)
+	if err != nil {
+		return true
+	}
+	floor, err := stackver.Parse(from)
+	if err != nil {
+		return true
+	}
+	return !have.Less(floor)
 }

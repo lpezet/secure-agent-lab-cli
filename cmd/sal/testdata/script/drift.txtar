@@ -84,7 +84,7 @@ stdout 'DRIFT\s+proxy/000_policy\.py\s+differs from stack/proxy/addons/'
 stdout 'MISSING\s+proxy/001_allowlist\.py'
 
 # A lab_setup fragment is compared like anything else an entry installs.
-stdout 'MISSING\s+lab/acme\.sh'
+stdout 'MISSING\s+lab/setup\.d/acme\.sh'
 
 # Recorded, still on disk, no longer shipped. A cred-gateway config in this
 # state keeps whitelisting a route its entry no longer exposes — a widened
@@ -185,7 +185,7 @@ name: drifted-lab
         "proxy/010_acme.py",
         "cred-gateway/acme.conf",
         "cred-gateway/acme-legacy.conf",
-        "lab/acme.sh"
+        "lab/setup.d/acme.sh"
       ]
     }
   ]

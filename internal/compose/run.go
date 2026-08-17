@@ -26,6 +26,21 @@ type Runner struct {
 	Stdout, Stderr io.Writer
 	Stdin          io.Reader
 
+	// Override is an optional second compose file, layered over File.
+	//
+	// It is how a deployment gets customised without editing what sal
+	// rewrites. compose.yaml is fetched verbatim and rewritten by `sal
+	// upgrade`, so an edit there is drift and is lost on the next upgrade —
+	// which made "change the wiring" look impossible when it is only the
+	// FIRST file that is off limits. Compose has layered files natively;
+	// nothing had to be invented and nothing upstream had to change.
+	//
+	// Owned by the operator: never written, never rewritten, never compared.
+	// `sal drift` notes that it EXISTS, because a clean report on compose.yaml
+	// would otherwise imply the wiring is what the release ships when a second
+	// file may have changed any of it.
+	Override string
+
 	// Project is the compose project name, passed on every invocation.
 	//
 	// The stack's template hardcodes `name: secure-agent-lab`, which is right
@@ -75,6 +90,11 @@ func (r *Runner) args(rest ...string) []string {
 		args = append(args, "--profile", p)
 	}
 	args = append(args, "-f", r.File)
+	if r.Override != "" {
+		// Order matters: later files win, so the operator's edits are applied
+		// over the release's wiring rather than under it.
+		args = append(args, "-f", r.Override)
+	}
 	return append(args, rest...)
 }
 

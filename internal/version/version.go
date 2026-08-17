@@ -48,12 +48,14 @@ const MinimumStack = "1.9.2"
 // stale default — then to v1.10.1 once sal could create a deployment shaped
 // the way that release expects (see AddonsBakedFrom), and to v1.12.0 with
 // TemplateFrom, which is also the oldest release a new lab can be created at.
-// It moved to v1.13.0 so a new lab's entries carry the egress they need — below
+// It moved to v1.14.0 so a lab_setup fragment has somewhere to run — see
+// SetupFragmentsFrom — and to v1.13.0 so a new lab's entries carry the egress
+// they need — below
 // that release an entry ships no allowlist, installs cleanly, and has every
 // request denied — and to v1.13.1, which is where the provider SKELETON gained
 // the same file, so an entry somebody scaffolds starts in the same state as one
 // they install.
-const DefaultStack = "v1.13.1"
+const DefaultStack = "v1.14.0"
 
 // AddonsBakedFrom is the first stack release whose proxy IMAGE carries the
 // base addons — 000_policy.py and 001_allowlist.py — at
@@ -165,4 +167,37 @@ func short(rev string) string {
 		return rev[:12]
 	}
 	return rev
+}
+
+// SetupFragmentsFrom is the first release whose deployment RUNS a bank entry's
+// lab_setup fragment.
+//
+// Below it there is nowhere to run one: the lab service mounts only the proxy
+// CA and the workspace, and its command is `sleep infinity`, so a fragment sal
+// installs sits in the build context and nothing reads it. Two bank entries
+// ship one and both are load-bearing — the lab-side half of installing that
+// provider — so those entries install and do not work.
+//
+// From 1.14.0 the template mounts ./lab/setup.d read-only at /etc/agent-setup.d
+// and the lab image's entrypoint executes each fragment before handing off to
+// the container command. sal writes to that path at every release, so a lab
+// created below the line already has its fragments in the right place when it
+// upgrades; only the note about nothing running them is conditional.
+const SetupFragmentsFrom = "1.14.0"
+
+// StackRunsSetupFragments reports whether this release runs them.
+//
+// Fails CLOSED on a tag it cannot parse — saying "nothing will run this" about
+// a deployment that would have is a wasted sentence, while staying quiet about
+// one that will not is a provider that does not work and never says so.
+func StackRunsSetupFragments(tag string) bool {
+	have, err := stackver.Parse(tag)
+	if err != nil {
+		return false
+	}
+	from, err := stackver.Parse(SetupFragmentsFrom)
+	if err != nil {
+		return false
+	}
+	return !have.Less(from)
 }

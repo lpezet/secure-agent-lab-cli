@@ -85,12 +85,24 @@ ls)
 	sed "s|@LABS@|$WORK/.config/secure-agent-lab/labs|g" "$FAKE_DOCKER_LS"
 	;;
 -f)
-	file=$2
-	verb=$3
-	shift 2
+	# Repeated -f is how a deployment layers its own compose.override.yaml over
+	# the release's wiring, so collect them all rather than assuming one. This
+	# read `-f FILE VERB` and took $3 as the verb, which silently became the
+	# second `-f` the day overrides landed.
+	files=""
+	while [ "$1" = "-f" ]; do
+		files="${files:+$files }$2"
+		shift 2
+	done
+	file=${files%% *}
+	verb=$1
 
 	if [ -n "$FAKE_DOCKER_LOG" ]; then
 		echo "$verb $file" >>"$FAKE_DOCKER_LOG"
+		# Every file, so a test can assert the override was passed AND that it
+		# came after the release's file — later wins, so the order is the
+		# behaviour rather than a detail.
+		echo "$verb files:$files" >>"$FAKE_DOCKER_LOG"
 		# On its own line, but naming the verb: several calls make up one
 		# command, and "some call passed --profile observer" is not the same
 		# claim as "the `up` did".

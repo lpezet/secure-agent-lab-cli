@@ -43,7 +43,7 @@ func TestPlanForFullEntry(t *testing.T) {
 		"broker/acme.js":         0o644,
 		"proxy/010_acme.py":      0o644, // the installer assigns NNN; the bank never bakes one in
 		"cred-gateway/acme.conf": 0o644,
-		"lab/acme.sh":            0o755, // named per entry, or two providers' setup.sh collide
+		"lab/setup.d/acme.sh":    0o755, // named per entry, or two providers' setup.sh collide
 	}
 	if len(got) != len(want) {
 		t.Fatalf("planned %v, want %v", got, want)

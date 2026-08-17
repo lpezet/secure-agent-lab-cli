@@ -25,7 +25,7 @@ stdout '^acme — slot 010$'
 stdout 'delete   broker/acme\.js'
 stdout 'delete   proxy/010_acme\.py'
 stdout 'delete   cred-gateway/acme\.conf'
-stdout 'delete   lab/acme\.sh'
+stdout 'delete   lab/setup\.d/acme\.sh'
 
 # The variables come from the manifest, never from the provider's name — the
 # same rule that stops sal choosing a credential's destination.
@@ -59,7 +59,7 @@ grep 'internal.example.com    GET' $WORK/.config/secure-agent-lab/labs/demo-lab/
 ! exists $WORK/.config/secure-agent-lab/labs/demo-lab/cred-gateway/acme.conf
 ! exists $WORK/.config/secure-agent-lab/labs/demo-lab/broker/acme.js
 ! exists $WORK/.config/secure-agent-lab/labs/demo-lab/proxy/010_acme.py
-! exists $WORK/.config/secure-agent-lab/labs/demo-lab/lab/acme.sh
+! exists $WORK/.config/secure-agent-lab/labs/demo-lab/lab/setup.d/acme.sh
 
 # The record no longer claims it, which is also what frees the slot.
 ! grep '"name": "acme"' $WORK/.config/secure-agent-lab/labs/demo-lab/.sal/installed.json
@@ -140,7 +140,7 @@ name: demo-lab
       "slot": 10,
       "schema_version": 1,
       "stack_tag": "v1.9.0",
-      "files": ["broker/acme.js", "proxy/010_acme.py", "cred-gateway/acme.conf", "lab/acme.sh"]
+      "files": ["broker/acme.js", "proxy/010_acme.py", "cred-gateway/acme.conf", "lab/setup.d/acme.sh"]
     }
   ]
 }
@@ -152,7 +152,7 @@ name: demo-lab
 location = /acme/credential { proxy_pass http://broker:8080; }
 -- .config/secure-agent-lab/labs/demo-lab/cred-gateway/acme-legacy.conf --
 location = /acme/legacy { proxy_pass http://broker:8080; }
--- .config/secure-agent-lab/labs/demo-lab/lab/acme.sh --
+-- .config/secure-agent-lab/labs/demo-lab/lab/setup.d/acme.sh --
 #!/bin/sh
 -- .config/secure-agent-lab/labs/demo-lab/.env --
 # a note somebody left by hand
