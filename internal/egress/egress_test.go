@@ -236,3 +236,100 @@ func read(t *testing.T, path string) string {
 	}
 	return string(b)
 }
+
+// `allowlist allow` puts a line OUTSIDE every block, which is what makes it
+// the operator's: it survives `providers remove` and no upgrade rewrites it.
+// Added into a block, it would vanish the next time that entry was written,
+// with nothing to say why.
+func TestAllowWritesOutsideEveryBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allowlist")
+	if _, err := Write(path, "acme", []Line{{Text: "api.acme.test POST"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	added, err := Allow(path, "operator.test", "*")
+	if err != nil || !added {
+		t.Fatalf("added = %v, err = %v", added, err)
+	}
+
+	owned, err := Blocks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, lines := range owned {
+		for _, l := range lines {
+			if l.Host() == "operator.test" {
+				t.Errorf("the operator's line landed inside %q's block, where an upgrade would erase it", name)
+			}
+		}
+	}
+	mine, err := Unmanaged(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mine) != 1 || mine[0].Host() != "operator.test" {
+		t.Errorf("unmanaged = %#v, want the one line just added", mine)
+	}
+
+	// And it survives what it is supposed to survive.
+	if _, err := Remove(path, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	if mine, _ = Unmanaged(path); len(mine) != 1 {
+		t.Error("removing the provider took the operator's line with it")
+	}
+}
+
+func TestAllowIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allowlist")
+
+	if added, _ := Allow(path, "operator.test", "*"); !added {
+		t.Fatal("first Allow reported no change")
+	}
+	added, err := Allow(path, "operator.test", "GET")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added {
+		t.Error("a second Allow for the same host reported a change")
+	}
+	if mine, _ := Unmanaged(path); len(mine) != 1 {
+		t.Errorf("the host was permitted twice: %#v", mine)
+	}
+}
+
+// Deleting an entry's line would work until the next add, upgrade or reset put
+// it back. A grant that reappears with nothing to explain it is worse than one
+// that was never removed, so this refuses and names the entry.
+func TestDenyRefusesADestinationAnEntryOwns(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allowlist")
+	if _, err := Write(path, "acme", []Line{{Text: "api.acme.test POST"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Deny(path, "api.acme.test")
+	var managed *ErrManaged
+	if err == nil {
+		t.Fatal("a managed destination was removed")
+	}
+	if !errorsAs(err, &managed) || managed.Owner != "acme" {
+		t.Fatalf("err = %v, want ErrManaged naming acme", err)
+	}
+
+	// And nothing was written on the way to refusing.
+	owned, _ := Blocks(path)
+	if len(owned["acme"]) != 1 {
+		t.Error("the block was modified by a call that refused")
+	}
+}
+
+func errorsAs(err error, target **ErrManaged) bool {
+	e, ok := err.(*ErrManaged)
+	if ok {
+		*target = e
+	}
+	return ok
+}

@@ -67,6 +67,7 @@ func NewRootCmd() *cobra.Command {
 		newProvidersCmd(),
 		newSecretsCmd(),
 		newFeaturesCmd(),
+		newAllowlistCmd(),
 		newObserverCmd(),
 		newLabsCmd(),
 		newVersionCmd(),

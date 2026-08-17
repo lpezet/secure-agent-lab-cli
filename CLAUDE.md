@@ -555,6 +555,32 @@ wrote by hand — the same asymmetry `providers remove` already follows for
 files, applied to the one control where a leftover is a widened boundary rather
 than a stale file.
 
+**`sal allowlist` puts the verbs on the FILE, not on the provider.** A
+hand-added line belongs to no entry, so `providers egress` could never describe
+half of what is in there — and `providers config` is ambiguous besides, since
+the manifest already has a `config` field meaning values in `.env`.
+
+`list` answers "what may this lab reach, and who decided each line", which is
+unanswerable by eye once there are a few entries and a few hand-written lines:
+the file gives no clue which is which. `reset` is the one with a job nothing
+else has — a lab edited into a state nobody can explain, where the symptom is
+an agent that cannot reach its vendor and the cause is three edits ago. What an
+entry's block should hold is answerable exactly, because the entry declares it.
+That is NOT `sal drift`, which asks whether the lab is what the release ships
+and deliberately does not compare the allowlist at all.
+
+`allow` writes outside every block, which is what makes the line the
+operator's: it survives `providers remove` and no upgrade rewrites it. `deny`
+REFUSES a destination an entry owns rather than deleting it — deleting would
+work until the next `providers add`, `upgrade` or `reset` wrote that block
+again, and a grant that reappears with nothing to explain it is worse than one
+that was never removed. The honest answer is `providers remove`, and the error
+says so.
+
+An empty allowlist is reported as a finding rather than printed as an empty
+list, because empty here means ENFORCING and denying everything — the opposite
+of what an empty listing usually implies.
+
 **Removing a provider never deletes a credential.** Reinstalling the provider
 undoes the removal; deleting a credential undoes nothing, and the two are
 different decisions. The paths are printed so `rm` is one line away for someone
