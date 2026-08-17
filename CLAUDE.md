@@ -468,6 +468,44 @@ layout is the bank's own so that what someone writes can be proposed to the
 bank unchanged — and so `sal` reads it with the same code that reads the bank,
 rather than a second path that could disagree about what an entry is.
 
+**Trusting a source and installing from it are TWO ACTS.** `sal providers
+source add owner/repo` says whose code may run behind this machine's credential
+boundary; `sal providers add slack@acme` says nothing new. A fully-qualified
+repository at install time would collapse them — re-deciding trust every time,
+in a long string pasted out of a README — and would leave nowhere to answer
+"which sources does this machine accept". That question is what
+`providers source list` exists for, and it is the reason the registry exists at
+all. Same shape as Claude's plugin marketplaces, for the same reason.
+
+**A bare name NEVER resolves to a source.** It means the bank, or your own
+providers directory, exactly as before. If a bare name searched added sources,
+then adding one could silently change what an existing name installs — which is
+the ambiguity the whole registry exists to prevent. So a third-party entry is
+always `entry@source`, and there is no resolution order to reason about.
+
+**The source's commit is recorded per entry**, in `installed.json`'s optional
+`source_commit`. A ref is a moving pointer, so comparing a lab against `main`
+would mean a branch that moved reads as the lab drifting — the same reason a
+deployment records the stack's commit beside its tag. `sal drift` fetches the
+source at the recorded commit and names it in the finding; a source that was
+removed leaves the entry UNRESOLVED rather than being compared against the
+bank, where a same-named entry would make a foreign file look correct.
+
+**Public repositories only, and that is a deferral rather than a limit.** A
+private repository is the case that matters most — the providers an
+organisation most wants to share are the ones it cannot publish — and it needs
+a token, which is its own decision on a tool whose entire subject is not
+handling credentials carelessly. Reading one from the environment is the
+obvious answer and is exactly the exposure `secrets set` refuses; shelling out
+to `gh` adds the dependency that fetching over HTTPS was chosen to avoid.
+Neither is decided, so neither is implemented.
+
+**`providers source remove` does not touch what was installed.** Untrusting a
+source sounds like it should revoke what came from it, which is why the command
+says it does not: reaching into every lab on the machine to delete files is not
+something to do quietly, and `sal providers remove` in the lab is the honest
+way.
+
 **A name in both banks is REFUSED, never resolved.** Preferring the local copy
 silently installs something other than the reviewed entry somebody asked for;
 preferring the bank silently ignores the one they wrote. Both are the wrong

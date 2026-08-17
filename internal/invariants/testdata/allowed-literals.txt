@@ -28,3 +28,24 @@ application/vnd.github+json
 # internal/compose's TestNoProviderNamesInOutput, which this file cannot cover
 # because the AST walk never reads a template.
 https://github.com/lpezet/secure-agent-lab.git
+
+# internal/source parses a GitHub repository reference, and internal/cli's
+# `providers source` explains what it accepts. These name the HOST a third-party
+# providers repository is published on, which is the same reason the entries
+# above are here — and the same test applies: every one of them would be
+# equally true if the bank were empty, and none of them is looked up, branched
+# on, or formatted into a path for a provider called github.
+#
+# Worth noting the near-miss: the bank DOES carry an entry called `github`, and
+# these literals have nothing to do with it. That is exactly why the check
+# matches whole literals and exempting is a visible diff.
+https://github.com/
+http://github.com/
+github.com/
+git@github.com:
+
+# Note what is NOT here: any prose. Three help and error strings named the host
+# in a sentence, and exempting a sentence works until somebody rewords it — the
+# check would go quiet without anyone deciding it should. The host is named in
+# the four prefixes above instead, and every message interpolates the first of
+# them.

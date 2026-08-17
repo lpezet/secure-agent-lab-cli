@@ -124,6 +124,14 @@ type Entry struct {
 	// event — see SchemaVersion above.
 	Source string `json:"source,omitempty"`
 
+	// SourceCommit is the commit a third-party source was read at. Empty for
+	// the bank and for a local entry, neither of which has one.
+	//
+	// An optional field, which this record's format allows without a
+	// generation bump — it is decoded plainly, so an older sal ignores what it
+	// does not know and still answers correctly every question it asks.
+	SourceCommit string `json:"source_commit,omitempty"`
+
 	InstalledAt time.Time `json:"installed_at,omitempty"`
 }
 
@@ -182,4 +190,24 @@ func (r *Record) Names() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// SourceFrom is how a third-party source is recorded: its registry name,
+// distinguishable from the bank ("") and from a local entry ("local") because
+// it is neither.
+//
+// Recorded rather than derived, for the reason every other source is: the two
+// are indistinguishable afterwards, they are not equivalent — one was reviewed
+// by whoever maintains the bank and one was not — and `sal drift` compares each
+// against a different tree.
+func SourceFrom(name string) string { return "source:" + name }
+
+// SourceName returns the registry name a record's Source refers to, and
+// whether it names one at all.
+func SourceName(s string) (string, bool) {
+	const prefix = "source:"
+	if len(s) > len(prefix) && s[:len(prefix)] == prefix {
+		return s[len(prefix):], true
+	}
+	return "", false
 }

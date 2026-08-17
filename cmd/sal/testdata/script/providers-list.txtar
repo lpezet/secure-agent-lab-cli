@@ -22,12 +22,18 @@ stderr 'no providers installed'
 cd ../stocked-project
 
 exec sal providers list
-stdout 'NAME\s+SLOT\s+SCHEMA\s+FROM'
+stdout 'NAME\s+SLOT\s+SCHEMA\s+STACK\s+ORIGIN'
 
 # The slot is printed with its leading zeros, because that is how it appears in
 # the filename the installer assigned.
 stdout 'acme\s+010\s+1\s+v1\.9\.0'
 stdout 'widget\s+011\s+1\s+v1\.9\.0'
+
+# ORIGIN is not decoration: the bank's entries were reviewed by whoever
+# maintains it and nothing else was, and two entries of the same name from two
+# places are identical on disk. It is unrecoverable from the files, so it is
+# recorded and shown.
+stdout 'acme\s+010\s+1\s+v1\.9\.0\s+bank'
 
 # --available needs to know which release to read the bank at. With no lab that
 # is unanswerable, and the error says how to answer it.

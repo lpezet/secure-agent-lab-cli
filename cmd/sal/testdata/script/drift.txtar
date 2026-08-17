@@ -57,7 +57,7 @@ cd $WORK/project
 # resolved — true of the bank, and wrong about the deployment.
 # Its credential is already stored, so the install has nothing to prompt for —
 # `sal secrets set` is where a credential is typed, and never a flag here.
-exec sal providers create telegraph
+exec sal providers create telegraph --stack-dir $FIXTURES/local-stack
 exec sal providers add telegraph --stack-dir $FIXTURES/local-stack
 exec sal drift --stack-dir $FIXTURES/local-stack
 stdout 'ok\s+proxy/011_telegraph\.py\s+matches your providers/telegraph/proxy/'

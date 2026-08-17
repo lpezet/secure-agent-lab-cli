@@ -1,0 +1,109 @@
+# `sal providers source` — the places other than the bank that this machine
+# will install providers from.
+#
+# Adding a source and installing from it are two acts. Adding one says whose
+# code may run behind this machine's credential boundary; installing from a
+# source already trusted says nothing new. A repository named at install time
+# would collapse them, re-deciding trust every time in a string pasted out of a
+# README — and leave nowhere to answer "which sources does this machine
+# accept".
+#
+# What is NOT covered here is the fetching: every case below either fails
+# before the network or reads a registry already on disk. Adding a source for
+# real is exercised against a live repository by hand, because a fake that
+# served a bank over HTTP would be testing the fake.
+
+cd project
+
+# Nothing added is the ordinary state, not an error — and it says what the
+# alternatives are rather than printing an empty list.
+exec sal providers source list
+! stdout .
+stderr 'no sources added'
+stderr 'sal providers source add'
+
+# What is not a repository is refused before anything is recorded or fetched.
+! exec sal providers source add 'not a repo'
+stderr 'not a repository this can read'
+stderr 'owner/repo'
+! exists $WORK/.config/secure-agent-lab/sources.json
+
+! exec sal providers source add https://example.com/acme/lab
+stderr 'not a repository this can read'
+
+# A name that could not be spelled after an @ is refused for the same reason an
+# entry name is: it is about to become part of an identifier.
+! exec sal providers source add acme/lab --as 'Not A Name'
+stderr 'not a usable source name'
+
+# ------------------------------------------------------- an existing registry
+#
+# Copied into place rather than shipped as a fixture: HOME is shared by every
+# directory in this script, so a registry present from the start would mean the
+# empty case above never ran.
+cd $WORK/stocked
+cp $WORK/registry.json $WORK/.config/secure-agent-lab/sources.json
+
+exec sal providers source list
+stdout '^acme\s+acme/lab-providers at v1\.0\.0$'
+stdout '^internal\s+acme/internal-tools at main$'
+
+# THE refusal. Re-adding a name silently repointing it at a different
+# repository is how somebody ends up running code from somewhere they did not
+# choose — so a taken name is refused, and the error says what it already
+# points at rather than making the operator go and look.
+! exec sal providers source add someone-else/lab-providers --as acme
+stderr 'already points at acme/lab-providers'
+stderr 'Remove it first'
+stderr 'somewhere nobody chose'
+
+# And nothing moved.
+exec sal providers source list
+stdout 'acme\s+acme/lab-providers'
+
+# A bare name NEVER resolves to a source. Adding one must not be able to change
+# what an existing name installs, which is the ambiguity the registry exists to
+# prevent — so a third-party entry is always qualified, and an unqualified name
+# that is nowhere is simply not found.
+! exec sal providers add slack --stack-dir $FIXTURES/local-stack
+stderr 'no entry named "slack"'
+! stderr 'acme'
+
+# An unknown source is refused with the reason, not a bare "not found": trust
+# is not something an install grants on your behalf.
+! exec sal providers add slack@nosuchsource --stack-dir $FIXTURES/local-stack
+stderr 'no source named "nosuchsource"'
+stderr 'decision about whose code may run behind your credential boundary'
+
+# Removing a source does NOT touch what was installed from it. The opposite is
+# a reasonable guess, so it is said rather than left to be discovered.
+exec sal providers source remove internal
+stderr 'removed source internal'
+stderr 'already installed from it is untouched'
+exec sal providers source list
+! stdout 'internal'
+stdout 'acme'
+
+! exec sal providers source remove internal
+stderr 'no source named "internal"'
+
+-- project/.sal/lab.json --
+{"schema_version": 1, "name": "project-lab", "stack_tag": "v1.13.1"}
+-- stocked/.sal/lab.json --
+{"schema_version": 1, "name": "stocked-lab", "stack_tag": "v1.13.1"}
+-- registry.json --
+{
+  "schema_version": 1,
+  "sources": [
+    {"name": "acme", "owner": "acme", "repo": "lab-providers", "ref": "v1.0.0"},
+    {"name": "internal", "owner": "acme", "repo": "internal-tools", "ref": "main"}
+  ]
+}
+-- .config/secure-agent-lab/labs/project-lab/compose.yaml --
+name: project-lab
+-- .config/secure-agent-lab/labs/project-lab/.sal/installed.json --
+{"schema_version": 1, "stack_tag": "v1.13.1", "base_addons": [], "installed": []}
+-- .config/secure-agent-lab/labs/stocked-lab/compose.yaml --
+name: stocked-lab
+-- .config/secure-agent-lab/labs/stocked-lab/.sal/installed.json --
+{"schema_version": 1, "stack_tag": "v1.13.1", "base_addons": [], "installed": []}
