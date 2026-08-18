@@ -16,6 +16,12 @@
 # The tier that still needs containers is the one this cannot do: busybox tar,
 # shasum instead of sha256sum, a PATH with no writable directory. See CLAUDE.md.
 #
+# The refusals below are ALSO produced against `sal update`, by
+# internal/selfupdate's tests — same list, other implementation. Having an
+# update path at all costs a second implementation of one policy, and the only
+# thing that makes that acceptable is holding both to the same scenarios: a
+# refusal added here belongs there too, and the reverse. See issue #47.
+#
 # Exit codes: 0 pass · 1 a test failed · 2 cannot run.
 set -uo pipefail
 

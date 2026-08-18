@@ -904,6 +904,7 @@ sal labs list
 sal labs down api-3f2a1b0c
 sal labs down --all
 sal open
+sal update
 ```
 
 **Lifecycle verbs are uniform, so they live in one group; a feature's own verbs
@@ -920,6 +921,34 @@ Observer earns one: `open` and `tail` are specific to a thing that serves a URL
 and a stream. The egress allowlist would not — it is enable/disable plus a
 config file, so it stays a `features` citizen. That rule is what keeps
 group-first from degenerating into one top-level group per feature.
+
+**`sal update` is the BINARY; `sal upgrade` is the LAB.** One letter apart in
+the listing and adjacent in it, so each command's help names the other. The
+asymmetry is why it matters: mistaking `update` for `upgrade` downloads a
+binary, and mistaking `upgrade` for `update` moves a security boundary.
+
+It verifies exactly what `install.sh` verifies — the checksum always, the
+Sigstore bundle when cosign is on `PATH`, and the same "signature NOT checked"
+sentence when it is not. A missing checksum, a checksums file with no line for
+this build, or a signature that fails are refusals, and a refusal leaves the
+existing binary untouched. This is deliberately NOT the shape most
+self-updaters take: `bun upgrade` reads the asset digest out of the same API
+response that gave it the download URL, and skips the check entirely when the
+API reports none.
+
+Two implementations of one policy is the cost of having the command at all, and
+what makes it acceptable is that both are held to one list of scenarios —
+`tests/install/run.sh` produces each refusal against the shell,
+`internal/selfupdate`'s tests produce it against the Go, and each file says so.
+
+**No wrapper on `PATH`, and no version argument.** A wrapper does not remove
+self-replacement, it relocates it to something that changes less often — and on
+POSIX there is nothing to relocate, because `rename(2)` is atomic and a running
+process keeps its open inode. The rename dance other tools perform is a Windows
+problem, and `install.sh` points Windows at WSL. The version argument already
+exists on `install.sh`; a second way to pin the binary is a second thing to get
+wrong. Issue #47 records the wrapper argument in full, including the one thing
+it would have done better.
 
 **Bare commands act on the lab in this directory; the plural noun manages the
 set.** `sal open`, `sal up`, `sal down`, `sal init` are here-and-now

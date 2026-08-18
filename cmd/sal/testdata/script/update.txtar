@@ -1,0 +1,50 @@
+# `sal update` — the BINARY, never the lab.
+#
+# What this script can see is the grammar and the two commands' refusal to be
+# confused with each other. What it deliberately does NOT cover is the
+# verification, because every scenario there needs a release to fetch: those
+# live in internal/selfupdate's tests against an httptest server, mirroring the
+# list tests/install/run.sh produces against the shell. Two implementations of
+# one policy, held to one list.
+
+# It needs no lab. Every other bare command answers about the deployment in
+# this directory; this one is about the binary, so it must work from anywhere —
+# including the directory somebody is standing in when they realise they are
+# behind.
+exec sal update --help
+stdout 'Replaces this sal with the newest published release'
+
+# The pair that must never be mixed up. `sal upgrade` moves a lab's security
+# boundary; `sal update` replaces an executable. They are one letter apart in
+# the listing, so each names the other rather than leaving it to be discovered.
+exec sal update --help
+stdout 'sal upgrade'
+stdout 'versioned separately'
+
+cd project
+exec sal upgrade --help
+stdout 'sal update'
+stdout 'versioned separately'
+cd $WORK
+
+# No version argument, deliberately: install.sh already takes one, and a second
+# way to pin the binary is a second thing to get wrong. The help says so rather
+# than leaving someone to try it.
+exec sal update --help
+stdout 'install.sh \| bash -s'
+! exec sal update v0.1.0
+stderr 'unknown command|accepts 0 arg'
+
+# --check reports and changes nothing. Named as such rather than being the
+# default: a version probe on every invocation would be a phone-home, and this
+# tool has no cache and does not make one.
+exec sal update --help
+stdout '--check'
+stdout 'change nothing'
+
+-- project/.sal/lab.json --
+{"schema_version": 1, "name": "demo-lab", "stack_tag": "v1.13.1"}
+-- .config/secure-agent-lab/labs/demo-lab/compose.yaml --
+name: demo-lab
+-- .config/secure-agent-lab/labs/demo-lab/.sal/installed.json --
+{"schema_version": 1, "stack_tag": "v1.13.1", "base_addons": [], "installed": []}
