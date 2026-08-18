@@ -55,6 +55,10 @@ stack        unknown — this directory has no lab
 Two versions, always. `sal` and the stack are tagged on separate lines: a
 single number could not answer "how far behind is my security boundary?".
 
+Afterwards, `sal update` replaces the binary in place — same verification the
+script does, and `--check` reports without touching anything. It is the one
+that moves *this* number; step 12's `sal upgrade` moves the other one.
+
 (A binary from `make build` reports `v0.1.0-3-g8bfda02` instead — `git
 describe` keeps the `v` and the commit distance, GoReleaser strips both. Same
 build, different provenance.)

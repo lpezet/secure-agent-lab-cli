@@ -33,6 +33,7 @@ func bareCommands() []*cobra.Command {
 		newOpenCmd(),
 		newUpgradeCmd(),
 		newDriftCmd(),
+		newUpdateCmd(),
 	}
 }
 
@@ -454,7 +455,10 @@ func newUpgradeCmd() *cobra.Command {
 			"files the new versions no longer ship, and re-renders compose.yaml.\n\n" +
 			"Every provider is checked before anything is written, and one that cannot make\n" +
 			"the move refuses the whole upgrade. Half a deployment on each of two releases\n" +
-			"is a boundary nobody can describe.",
+			"is a boundary nobody can describe.\n\n" +
+			"This moves the LAB. `sal update` is the one that replaces the sal binary — the\n" +
+			"two are versioned separately, so that updating your tool cannot move your\n" +
+			"security boundary and pinning your boundary cannot strand you on an old CLI.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runUpgrade(cmd, to, dryRun)

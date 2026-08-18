@@ -135,6 +135,11 @@ correct, **is** a generation event wherever it lives.
 optional flag, a new optional field in `installed.json`, support for an
 additional schema generation, a new stack release the CLI knows about.
 
+Note that this catches things that feel like fixes. `sal update` arrived as a
+convenience over an install path that already worked, and it is still a minor
+bump rather than a patch, because the command grammar is part of the surface
+above and a script may now depend on `sal update` existing.
+
 **Patch** — behaviour is corrected without changing the surface. A bug fix that
 changes output wording is a patch, because wording is not part of the surface.
 
