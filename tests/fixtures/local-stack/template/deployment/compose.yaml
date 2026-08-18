@@ -204,6 +204,11 @@ services:
       # The project the agent works on. Point this wherever you like — it is
       # the one mount whose contents the agent can write.
       - ${WORKSPACE_DIR:-./workspace}:/workspace
+    # Where the container's own command starts, and where `docker compose exec`
+    # lands when it is given no `--workdir` of its own — as upstream sets it
+    # from 1.14.4. Without it there is no working directory at all and both
+    # begin in `/`.
+    working_dir: /workspace
     # lab.env, NOT .env. Each bank entry declares what the lab side needs under
     # `lab_env` in its manifest — GH_TOKEN=proxy-injected and the like — and
     # those belong in a file rather than restated here. It is a separate file
