@@ -330,7 +330,14 @@ func Unmanaged(path string) ([]Line, error) {
 func Allow(path, host, methods string) (added bool, err error) {
 	text := host
 	if methods != "" {
-		text = fmt.Sprintf("%-24s%s", host, methods)
+		// The pad is a MINIMUM, so the separating space has to be its own
+		// character: `%-24s%s` emits nothing for a host of 24 or more and runs
+		// the two fields together. That parses — as one field — so the mangled
+		// name becomes the permitted destination, the real one stays blocked,
+		// and neither `allowlist deny` nor Allow's own idempotence check can
+		// find the host again. Padding to 23 with an explicit space is
+		// byte-identical below the threshold and correct above it.
+		text = fmt.Sprintf("%-23s %s", host, methods)
 	}
 
 	existing, err := Unmanaged(path)
