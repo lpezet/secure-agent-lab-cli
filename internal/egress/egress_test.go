@@ -281,6 +281,56 @@ func TestAllowWritesOutsideEveryBlock(t *testing.T) {
 	}
 }
 
+// A host of 24 characters or more used to run into its methods, because the
+// column pad is a minimum width rather than a separator. The result parses as
+// one field, so the mangled name is what gets permitted: the destination the
+// operator asked for stays blocked while the file looks like it was granted,
+// `allowlist deny` cannot match the host to take it back, and Allow's own
+// idempotence check misses it and appends a duplicate on every call.
+func TestAllowSeparatesALongHostFromItsMethods(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allowlist")
+
+	const host = "a-very-long-destination.test" // 28 characters, past the pad
+	if added, err := Allow(path, host, "GET,POST"); err != nil || !added {
+		t.Fatalf("added = %v, err = %v", added, err)
+	}
+
+	mine, err := Unmanaged(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mine) != 1 || mine[0].Host() != host {
+		t.Fatalf("read back %#v, want the one line for %s", mine, host)
+	}
+
+	// The consequences, each of which the run-together line broke.
+	if added, _ := Allow(path, host, "GET"); added {
+		t.Error("a second Allow for the same host reported a change")
+	}
+	if mine, _ := Unmanaged(path); len(mine) != 1 {
+		t.Errorf("the host was permitted twice: %#v", mine)
+	}
+	if removed, err := Deny(path, host); err != nil || !removed {
+		t.Errorf("Deny could not take back what Allow wrote: removed = %v, err = %v", removed, err)
+	}
+}
+
+// Below the threshold the column layout is what the bank's own allowlist files
+// use, and the fix above must not have shifted it.
+func TestAllowKeepsTheMethodsColumn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allowlist")
+
+	if _, err := Allow(path, "api.acme.test", "GET,POST"); err != nil {
+		t.Fatal(err)
+	}
+	want := "api.acme.test           GET,POST"
+	if got := read(t, path); !strings.Contains(got, want) {
+		t.Errorf("allowlist =\n%s\nwant a line %q", got, want)
+	}
+}
+
 func TestAllowIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "allowlist")
