@@ -248,9 +248,9 @@ func TestAllowWritesOutsideEveryBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	added, err := Allow(path, "operator.test", "*")
-	if err != nil || !added {
-		t.Fatalf("added = %v, err = %v", added, err)
+	g, err := Allow(path, "operator.test", "*")
+	if err != nil || !g.Wrote {
+		t.Fatalf("wrote = %v, err = %v", g.Wrote, err)
 	}
 
 	owned, err := Blocks(path)
@@ -292,8 +292,8 @@ func TestAllowSeparatesALongHostFromItsMethods(t *testing.T) {
 	path := filepath.Join(dir, "allowlist")
 
 	const host = "a-very-long-destination.test" // 28 characters, past the pad
-	if added, err := Allow(path, host, "GET,POST"); err != nil || !added {
-		t.Fatalf("added = %v, err = %v", added, err)
+	if g, err := Allow(path, host, "GET,POST"); err != nil || !g.Wrote {
+		t.Fatalf("wrote = %v, err = %v", g.Wrote, err)
 	}
 
 	mine, err := Unmanaged(path)
@@ -305,14 +305,14 @@ func TestAllowSeparatesALongHostFromItsMethods(t *testing.T) {
 	}
 
 	// The consequences, each of which the run-together line broke.
-	if added, _ := Allow(path, host, "GET"); added {
+	if g, _ := Allow(path, host, "GET,POST"); g.Wrote {
 		t.Error("a second Allow for the same host reported a change")
 	}
 	if mine, _ := Unmanaged(path); len(mine) != 1 {
 		t.Errorf("the host was permitted twice: %#v", mine)
 	}
-	if removed, err := Deny(path, host); err != nil || !removed {
-		t.Errorf("Deny could not take back what Allow wrote: removed = %v, err = %v", removed, err)
+	if rev, err := Deny(path, host); err != nil || !rev.Removed {
+		t.Errorf("Deny could not take back what Allow wrote: removed = %v, err = %v", rev.Removed, err)
 	}
 }
 
@@ -335,18 +335,46 @@ func TestAllowIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "allowlist")
 
-	if added, _ := Allow(path, "operator.test", "*"); !added {
+	if g, _ := Allow(path, "operator.test", "*"); !g.Wrote {
 		t.Fatal("first Allow reported no change")
 	}
-	added, err := Allow(path, "operator.test", "GET")
+	g, err := Allow(path, "operator.test", "*")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if added {
+	if g.Wrote {
 		t.Error("a second Allow for the same host reported a change")
 	}
 	if mine, _ := Unmanaged(path); len(mine) != 1 {
 		t.Errorf("the host was permitted twice: %#v", mine)
+	}
+}
+
+// The same call with DIFFERENT methods is not the same call. It used to report
+// "already permitted" and change nothing, which is issue #50's failure shape
+// one step earlier: the operator asks to widen a destination, sal says it is
+// permitted, and the methods they asked for are not in the file at all.
+func TestAllowRewritesYourOwnLineWhenTheMethodsChange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allowlist")
+
+	if _, err := Allow(path, "operator.test", "GET"); err != nil {
+		t.Fatal(err)
+	}
+	g, err := Allow(path, "operator.test", "GET,POST")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !g.Wrote || g.Replaced == "" {
+		t.Fatalf("wrote = %v, replaced = %q, want the previous line reported", g.Wrote, g.Replaced)
+	}
+
+	mine, _ := Unmanaged(path)
+	if len(mine) != 1 {
+		t.Fatalf("the host was permitted twice: %#v", mine)
+	}
+	if !strings.Contains(mine[0].Text, "GET,POST") {
+		t.Errorf("line = %q, want the methods just asked for", mine[0].Text)
 	}
 }
 
@@ -361,7 +389,7 @@ func TestDenyRefusesADestinationAnEntryOwns(t *testing.T) {
 	}
 
 	_, err := Deny(path, "api.acme.test")
-	var managed *ErrManaged
+	var managed *ErrManaged // nolint: the assertion is below
 	if err == nil {
 		t.Fatal("a managed destination was removed")
 	}
@@ -382,4 +410,250 @@ func errorsAs(err error, target **ErrManaged) bool {
 		*target = e
 	}
 	return ok
+}
+
+// The ordering rule, stated as the property the proxy actually enforces.
+//
+// stack/proxy/addons/001_allowlist.py loads the file with
+// `entries[domain] = methods`, so two lines for one destination are one dict
+// entry and the LAST of them is the rule. Issue #50: an operator widening what
+// an entry seeded got their line written above the entry's block, sal reported
+// the destination permitted with the methods asked for, and the proxy went on
+// enforcing the entry's narrower line. Position is enforcement in this file,
+// so the operator's lines go last.
+func TestTheOperatorsLineComesAfterEveryBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allowlist")
+	if _, err := Write(path, "acme", []Line{{Text: "api.acme.test GET"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Allow(path, "api.acme.test", "GET,POST"); err != nil {
+		t.Fatal(err)
+	}
+
+	assertLast(t, path, "api.acme.test", "GET,POST")
+
+	// And the next install, upgrade or reset must not put the entry back in
+	// front of it — the same bug with the two writers swapped.
+	if _, err := Write(path, "acme", []Line{{Text: "api.acme.test GET"}}); err != nil {
+		t.Fatal(err)
+	}
+	assertLast(t, path, "api.acme.test", "GET,POST")
+
+	// A second entry arriving later must not either.
+	if _, err := Write(path, "beta", []Line{{Text: "api.beta.test GET"}}); err != nil {
+		t.Fatal(err)
+	}
+	assertLast(t, path, "api.acme.test", "GET,POST")
+}
+
+// A lab written by an older sal has the operator's line ABOVE the block, where
+// it does nothing. Allow moves the one line it was asked about, and reports
+// that it did — sal never silently reorders the rest of what somebody wrote.
+func TestAllowMovesALineTheProxyWasIgnoring(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allowlist")
+	legacy := `api.acme.test           GET,POST
+
+# --- sal:acme --- managed; ` + "`sal providers remove acme`" + ` removes it
+api.acme.test GET
+# --- end sal:acme ---
+`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := Allow(path, "api.acme.test", "GET,POST")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !g.Wrote || !g.Moved {
+		t.Fatalf("wrote = %v, moved = %v, want the line reported as moved", g.Wrote, g.Moved)
+	}
+	if mine, _ := Unmanaged(path); len(mine) != 1 {
+		t.Fatalf("the line was duplicated rather than moved: %#v", mine)
+	}
+	assertLast(t, path, "api.acme.test", "GET,POST")
+}
+
+// Widening an entry's grant makes that entry's line inert, which is a change
+// to what the boundary enforces. The caller reports it; this is what gives it
+// the words.
+func TestAllowNamesTheEntryLineItDisplaces(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allowlist")
+	if _, err := Write(path, "acme", []Line{{Text: "api.acme.test GET"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := Allow(path, "api.acme.test", "GET,POST")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Shadowed) != 1 || g.Shadowed[0].Entry != "acme" {
+		t.Fatalf("shadowed = %#v, want the acme line", g.Shadowed)
+	}
+	if g.Shadowed[0].Line.Text != "api.acme.test GET" {
+		t.Errorf("shadowed line = %q, want it reported as it stands in the file", g.Shadowed[0].Line.Text)
+	}
+
+	// A destination nothing else names displaces nothing, and must not be
+	// reported as if it had.
+	g, err = Allow(path, "other.test", "GET")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Shadowed) != 0 {
+		t.Errorf("shadowed = %#v for a destination no entry names", g.Shadowed)
+	}
+}
+
+// Effective is the only thing that can say which of two lines for one host is
+// real, and the reason `allowlist list` can be trusted after #50.
+func TestEffectiveNamesTheLineTheProxyKeeps(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allowlist")
+	if _, err := Write(path, "acme", []Line{{Text: "api.acme.test GET"}, {Text: "cdn.acme.test GET"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Allow(path, "api.acme.test", "GET,POST"); err != nil {
+		t.Fatal(err)
+	}
+
+	eff, err := Effective(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eff["api.acme.test"] != "" {
+		t.Errorf("api.acme.test resolves to %q, want the operator's line", eff["api.acme.test"])
+	}
+	if eff["cdn.acme.test"] != "acme" {
+		t.Errorf("cdn.acme.test resolves to %q, want the acme entry", eff["cdn.acme.test"])
+	}
+}
+
+// A wildcard is NOT a collision, and sal must not report one. hostmatch.find
+// gives exact over wildcard and a longer suffix over a shorter one, whatever
+// the file's order — so nothing here decides between two different patterns,
+// and claiming a wildcard shadows a host would be sal inventing a rule the
+// proxy does not have.
+func TestAWildcardIsNotACollision(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allowlist")
+	if _, err := Write(path, "acme", []Line{{Text: "api.acme.test GET"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := Allow(path, "*.acme.test", "GET,POST")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Shadowed) != 0 {
+		t.Errorf("shadowed = %#v, want nothing: a wildcard and a host are different patterns", g.Shadowed)
+	}
+	eff, _ := Effective(path)
+	if eff["api.acme.test"] != "acme" {
+		t.Errorf("api.acme.test resolves to %q; the wildcard does not displace it", eff["api.acme.test"])
+	}
+}
+
+// Case is not a second destination: the proxy lowercases the key, so two
+// spellings are one grant to it and must be one to sal.
+func TestHostCaseIsTheProxysRule(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allowlist")
+
+	if _, err := Allow(path, "API.Acme.Test", "GET"); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := Allow(path, "api.acme.test", "GET"); g.Wrote {
+		t.Error("the same destination in another case was permitted twice")
+	}
+	if rev, err := Deny(path, "API.ACME.TEST"); err != nil || !rev.Removed {
+		t.Errorf("Deny could not match the host it wrote: removed = %v, err = %v", rev.Removed, err)
+	}
+}
+
+// Denying a line that widened an entry's does not close the destination — it
+// hands it back. Refusing the removal instead would leave `allow` with no
+// counterpart: take an entry's grant and never give it back.
+func TestDenyTakesYourLineAndSaysWhatIsLeft(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allowlist")
+	if _, err := Write(path, "acme", []Line{{Text: "api.acme.test GET"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Allow(path, "api.acme.test", "GET,POST"); err != nil {
+		t.Fatal(err)
+	}
+
+	rev, err := Deny(path, "api.acme.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rev.Removed {
+		t.Fatal("the operator's own line was not removed")
+	}
+	if len(rev.Restored) != 1 || rev.Restored[0].Entry != "acme" {
+		t.Fatalf("restored = %#v, want the acme line reported as still permitting it", rev.Restored)
+	}
+	if mine, _ := Unmanaged(path); len(mine) != 0 {
+		t.Errorf("unmanaged = %#v, want nothing left of yours", mine)
+	}
+	if owned, _ := Blocks(path); len(owned["acme"]) != 1 {
+		t.Error("denying your own line reached into the entry's block")
+	}
+}
+
+// Appending at the end of the file meets one shape where the end of the file
+// is inside somebody's block. A line written there would be deleted by the
+// next `providers remove` — the one place the "outside every block" rule could
+// break silently.
+func TestAllowNeverWritesIntoAnUnterminatedBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "allowlist")
+	broken := "# --- sal:acme --- managed\napi.acme.test GET\n"
+	if err := os.WriteFile(path, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Allow(path, "operator.test", "*"); err != nil {
+		t.Fatal(err)
+	}
+	mine, err := Unmanaged(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mine) != 1 || mine[0].Host() != "operator.test" {
+		t.Fatalf("unmanaged = %#v, want the line just added, outside the block", mine)
+	}
+	if _, err := Remove(path, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	if mine, _ = Unmanaged(path); len(mine) != 1 {
+		t.Error("removing the entry took the operator's line with it")
+	}
+}
+
+// assertLast is the ordering property itself: of every line naming this
+// destination, the one the proxy keeps is the operator's.
+func assertLast(t *testing.T, path, host, methods string) {
+	t.Helper()
+
+	last := ""
+	for _, raw := range strings.Split(read(t, path), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if f := strings.Fields(line); len(f) > 0 && f[0] == host {
+			last = line
+		}
+	}
+	if last == "" {
+		t.Fatalf("no line for %s in\n%s", host, read(t, path))
+	}
+	if !strings.Contains(last, methods) {
+		t.Errorf("the last line for %s is %q, want the one permitting %s\n%s", host, last, methods, read(t, path))
+	}
 }

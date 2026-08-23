@@ -678,6 +678,47 @@ An empty allowlist is reported as a finding rather than printed as an empty
 list, because empty here means ENFORCING and denying everything — the opposite
 of what an empty listing usually implies.
 
+**POSITION IN THAT FILE IS ENFORCEMENT, so the operator's lines go LAST.** The
+proxy addon loads the allowlist into `entries[domain] = methods` — plain
+assignment in file order — so two lines naming one destination are one dict
+entry and the LAST of them is the rule. `allow` used to insert before the first
+block, so that "the operator's own policy stays together at the top". That was
+a legibility argument applied to a file where order decides what leaves, and it
+produced issue #50: widening a destination an entry seeded (`platform.claude.com
+GET` → `GET,POST`, so an interactive login can POST its token) wrote the line
+above the entry's block, sal reported the destination permitted with the methods
+asked for, `allowlist list` showed it, and the POST stayed 403 — the entry's
+narrower line came later and replaced it.
+
+The rule has to hold in BOTH writers or it holds in neither. Fixing `allow`
+alone would have left the next `providers add`, `upgrade` or `allowlist reset`
+writing the entry's block back on top of the operator's line, so `Write` now
+inserts a block ABOVE the operator's lines rather than appending it to the end
+of the file. A lab created by an older sal keeps its line in the old place;
+`allow` MOVES the one line it was asked about and says it did, because sal
+reordering the rest of what somebody wrote is not something to do quietly.
+
+Note how narrow the rule it restates is, because the temptation is to claim
+more. Selection between DIFFERENT patterns is not file order at all —
+`hostmatch.find` gives exact over wildcard and a longer wildcard suffix over a
+shorter one, explicitly so that ordering a security decision by however a config
+file happened to be written cannot happen. So `*.claude.com` does not shadow
+`platform.claude.com`, and sal must never say it does. Only an identical key
+collides, and the key is the lowercased first field, which is why sal compares
+hosts case-insensitively and writes them lowercased. `egress.hostKey` is the one
+place that is restated, and — like the `load_band` NNN ranges — it is a rule
+that exists only in the shape of the stack's Python and can silently desync.
+
+Two consequences worth stating. `allowlist list` MARKS the line the proxy drops,
+via `egress.Effective`, because grouping by who decided a line cannot answer
+which of two lines is in force, and a grant that is written, listed and not
+enforced is the failure the listing exists to prevent. And `deny` no longer
+refuses a destination that an entry declares AND the operator widened: it takes
+out the operator's line and reports that the entry's is what now applies. The
+refusal stands for a destination that is only an entry's — but with the widening
+supported, refusing the other case would let someone take a grant and never give
+it back.
+
 **A `lab_setup` fragment goes in `lab/setup.d/<name>.sh`, and from stack
 1.14.0 something runs it.** Below that release there was nowhere to: the lab
 mounted only the proxy CA and the workspace, its command was `sleep infinity`,

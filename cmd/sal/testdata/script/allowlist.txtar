@@ -60,6 +60,49 @@ stderr 'sal providers remove widget'
 exec sal allowlist list
 stdout '^  api\.widget\.example'
 
+# --------------------------------------------------- widening what an entry seeded
+#
+# Issue #50. An entry seeds `api.widget.example GET,POST`; the operator needs a
+# DELETE. sal used to write that line ABOVE the entry's block, report the
+# destination permitted with the methods asked for, and leave the proxy
+# enforcing the entry's line — because it loads the file into
+# `entries[domain] = methods` and keeps the LAST one. So the operator's lines go
+# last, and the displaced rule is named rather than left to be discovered as a
+# refused request.
+exec sal allowlist allow api.widget.example GET,POST,DELETE
+stderr 'permitted api\.widget\.example GET,POST,DELETE'
+stderr 'already permitted by an installed entry'
+stderr 'api\.widget\.example\s+GET,POST\s+\(the widget entry\)'
+stderr 'keeps the LAST line'
+
+# And the listing says which of the two is real, which is the half that stops
+# the silent case recurring: both lines are in the file and both are printed.
+exec sal allowlist list
+stdout 'api\.widget\.example\s+GET,POST\s+<- overridden by your line below'
+stdout '^yours$'
+stderr 'permitted by the LAST of them'
+
+# What sal writes NEXT must not get back in front of it. Every block goes above
+# the operator's lines, so this reset — and `providers add` and `upgrade`, which
+# write through the same function — cannot undo what was just granted. Fixing
+# only `allow` would have left the entry back on top at the next install.
+exec sal allowlist reset --stack-dir $FIXTURES/local-stack
+exec sal allowlist list
+stdout 'api\.widget\.example\s+GET,POST\s+<- overridden by your line below'
+
+# Denying it is the counterpart, and it does not close the destination — it
+# hands it back to the entry. Saying only "denied" would describe a lab that
+# cannot reach the host, when it still can.
+exec sal allowlist deny api.widget.example
+stderr 'denied api\.widget\.example'
+stderr 'still permitted'
+stderr 'the widget entry'
+stderr 'sal providers remove widget'
+
+# With yours gone, the entry owns it again and the refusal is back.
+! exec sal allowlist deny api.widget.example
+stderr 'permitted by the widget entry, not by you'
+
 # ------------------------------------------------------------------- reset
 #
 # The command with a job nothing else has: a lab edited into a state nobody can
