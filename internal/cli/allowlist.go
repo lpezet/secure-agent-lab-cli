@@ -3,8 +3,10 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -42,6 +44,10 @@ func newAllowlistListCmd() *cobra.Command {
 			"A line inside a marked block came from a bank entry and is rewritten whenever\n" +
 			"that entry is installed or upgraded. Everything else you wrote, and nothing sal\n" +
 			"does will touch it.\n\n" +
+			"A destination named by two lines is permitted by the LAST of them, so one of the\n" +
+			"two does nothing. Those are marked, because both are in the file and both are\n" +
+			"listed — and a grant that is written, listed and not enforced is the one thing\n" +
+			"this listing exists to make impossible.\n\n" +
 			"This reads the file, not the running proxy. A lab that has not been restarted\n" +
 			"since the file changed is still enforcing the old one — `sal up` is what makes\n" +
 			"them the same.",
@@ -66,6 +72,13 @@ func runAllowlistList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	// Which line each destination resolves to. Grouping by who decided a line
+	// cannot answer that on its own: a host in two groups is listed twice and
+	// only one of them is enforced.
+	inForce, err := egress.Effective(path)
+	if err != nil {
+		return err
+	}
 
 	if len(owned) == 0 && len(mine) == 0 {
 		// Said as a finding rather than printed as an empty list. An empty
@@ -85,16 +98,25 @@ func runAllowlistList(cmd *cobra.Command, _ []string) error {
 	}
 	sort.Strings(names)
 
+	shadowed := 0
 	for _, name := range names {
 		fmt.Fprintf(out, "%s\n", name)
 		for _, line := range owned[name] {
-			fmt.Fprintf(out, "  %s\n", line.Text)
+			note := overriddenBy(inForce, line, name)
+			if note != "" {
+				shadowed++
+			}
+			fmt.Fprintf(out, "  %s%s\n", line.Text, note)
 		}
 	}
 	if len(mine) > 0 {
 		fmt.Fprintf(out, "yours\n")
 		for _, line := range mine {
-			fmt.Fprintf(out, "  %s\n", line.Text)
+			note := overriddenBy(inForce, line, "")
+			if note != "" {
+				shadowed++
+			}
+			fmt.Fprintf(out, "  %s%s\n", line.Text, note)
 		}
 	}
 
@@ -103,7 +125,30 @@ func runAllowlistList(cmd *cobra.Command, _ []string) error {
 		fmt.Fprintf(errOut, "Lines under an entry's name are rewritten by `sal providers add`, `sal upgrade`\n"+
 			"and `sal allowlist reset`. Lines under `yours` are never touched by sal.\n")
 	}
+	if shadowed > 0 {
+		fmt.Fprintf(errOut, "A destination named by two lines is permitted by the LAST of them — the proxy\n"+
+			"keeps one rule per destination. The marked lines are the ones it drops.\n")
+	}
 	return nil
+}
+
+// overriddenBy marks a line the proxy will not enforce, because another line
+// names the same destination further down the file.
+//
+// This is the whole reason `list` can be trusted after issue #50: a widened
+// grant and the entry's narrower one are both in the file, both printed, and
+// nothing else says which is real. It marks only an exact same-destination
+// collision, because that is the only case file order decides — see
+// egress.HostKey.
+func overriddenBy(inForce map[string]string, l egress.Line, owner string) string {
+	winner, ok := inForce[egress.HostKey(l.Host())]
+	if !ok || winner == owner {
+		return ""
+	}
+	if winner == "" {
+		return "   <- overridden by your line below"
+	}
+	return "   <- overridden by the " + winner + " entry below"
 }
 
 func newAllowlistResetCmd() *cobra.Command {
@@ -224,6 +269,11 @@ func newAllowlistAllowCmd() *cobra.Command {
 		Short: "Permit a destination of your own",
 		Long: "Adds a destination outside every managed block, which is what makes it yours:\n" +
 			"it survives `sal providers remove`, and no upgrade rewrites it.\n\n" +
+			"The line goes at the END of the file, after every block. The proxy keeps the\n" +
+			"LAST line for a destination, so one written above an entry's block is one it\n" +
+			"drops — which is how widening a destination an entry seeded could be reported\n" +
+			"as permitted and stay refused. Writing it last makes yours the final word, and\n" +
+			"sal names the entry line it displaces when there is one.\n\n" +
 			"METHODS is a comma-separated list, or `*`. OMITTING IT IS NOT NEUTRAL — the\n" +
 			"proxy defaults a line with no methods to GET,HEAD,OPTIONS, safe reads only, so\n" +
 			"a bare host looks permitted and denies every write. sal states what it wrote\n" +
@@ -240,35 +290,78 @@ func newAllowlistAllowCmd() *cobra.Command {
 }
 
 func runAllowlistAllow(cmd *cobra.Command, host, methods string) error {
-	out, errOut := cmd.ErrOrStderr(), cmd.ErrOrStderr()
-	_ = out
+	errOut := cmd.ErrOrStderr()
 
 	l, path, err := allowlistPath()
 	if err != nil {
 		return err
 	}
 
-	added, err := egress.Allow(path, host, methods)
+	g, err := egress.Allow(path, host, methods)
 	if err != nil {
 		return err
 	}
-	if !added {
-		fmt.Fprintf(errOut, "%s is already permitted in %s; nothing to do\n", host, l.Name)
+
+	if !g.Wrote {
+		fmt.Fprintf(errOut, "%s is already permitted in %s; nothing to do\n", g.Host, l.Name)
+		reportShadowed(errOut, g)
 		return nil
+	}
+
+	switch {
+	case g.Moved:
+		// The lab issue #50 was reported from: the grant was in the file, and
+		// the entry's line for the same destination came after it.
+		fmt.Fprintf(errOut, "moved your %s line below every managed block.\n"+
+			"It was above them, where an entry's line for the same destination replaces it —\n"+
+			"so what the file said you had permitted was not what the proxy was enforcing.\n"+
+			"It is now.\n", g.Host)
+	case g.Replaced != "":
+		fmt.Fprintf(errOut, "permitted %s\n     was  %s\n", written(g), g.Replaced)
+	default:
+		fmt.Fprintf(errOut, "permitted %s\n", written(g))
 	}
 
 	if methods == "" {
 		// Not a warning about a mistake — it may be what was meant. It is a
 		// statement of what the line now does, because the default is the one
 		// thing about this file's syntax that is not visible in it.
-		fmt.Fprintf(errOut, "permitted %s with no methods, which the proxy reads as GET,HEAD,OPTIONS —\n"+
-			"safe reads only. `sal allowlist allow %s POST` if it needs to write.\n", host, host)
-	} else {
-		fmt.Fprintf(errOut, "permitted %s %s\n", host, methods)
+		fmt.Fprintf(errOut, "No methods, which the proxy reads as GET,HEAD,OPTIONS — safe reads only.\n"+
+			"`sal allowlist allow %s POST` if it needs to write.\n", g.Host)
 	}
+
+	reportShadowed(errOut, g)
 	fmt.Fprintf(errOut, "Run `sal up` to restart the lab against it — the proxy reads the allowlist at\n"+
 		"startup.\n")
 	return nil
+}
+
+// written renders the line as one space-separated string, so a message says
+// what is in the file rather than re-deriving it from the arguments.
+func written(g egress.Grant) string {
+	return strings.Join(strings.Fields(g.Text), " ")
+}
+
+// reportShadowed names the rule this line displaces.
+//
+// An entry seeds the destinations it needs, and widening one is a supported
+// thing to do — but it means an installed entry's line is now inert, which is
+// a change to what the boundary enforces that nothing else would report. So
+// the entry is named, its line is printed as it stands, and the precedence
+// that decides between them is stated rather than left to be discovered when a
+// request is refused.
+func reportShadowed(w io.Writer, g egress.Grant) {
+	if len(g.Shadowed) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\nNOTE: %s is already permitted by an installed entry:\n", g.Host)
+	for _, m := range g.Shadowed {
+		fmt.Fprintf(w, "        %-38s (the %s entry)\n", m.Line.Text, m.Entry)
+	}
+	fmt.Fprintf(w, "      Your line comes after that block, and the proxy keeps the LAST line for a\n"+
+		"      destination — so yours is what it enforces and the entry's above is dropped.\n"+
+		"      `sal allowlist list` marks it; `sal allowlist deny %s` takes yours back out\n"+
+		"      and hands the destination back to the entry.\n", g.Host)
 }
 
 func newAllowlistDenyCmd() *cobra.Command {
@@ -279,7 +372,10 @@ func newAllowlistDenyCmd() *cobra.Command {
 			"entry rather than deleting it: that would work until the next `sal providers\n" +
 			"add`, `sal upgrade` or `sal allowlist reset` put it back, and a grant that\n" +
 			"reappears with nothing to explain it is worse than one that was never removed.\n" +
-			"`sal providers remove NAME` is the honest way to close that one.",
+			"`sal providers remove NAME` is the honest way to close that one.\n\n" +
+			"A destination an entry declares AND you widened is not that case: your own line\n" +
+			"goes and the entry's stays, so the destination is still permitted — with the\n" +
+			"methods the entry asked for. sal says so rather than reporting it denied.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAllowlistDeny(cmd, args[0])
@@ -295,7 +391,7 @@ func runAllowlistDeny(cmd *cobra.Command, host string) error {
 		return err
 	}
 
-	removed, err := egress.Deny(path, host)
+	rev, err := egress.Deny(path, host)
 	if err != nil {
 		var managed *egress.ErrManaged
 		if errors.As(err, &managed) {
@@ -308,12 +404,23 @@ func runAllowlistDeny(cmd *cobra.Command, host string) error {
 		}
 		return err
 	}
-	if !removed {
+	if !rev.Removed {
 		return fmt.Errorf("%s is not permitted in lab %q, so there is nothing to remove.\n"+
 			"`sal allowlist list` shows what is", host, l.Name)
 	}
 
-	fmt.Fprintf(errOut, "denied %s\n", host)
+	fmt.Fprintf(errOut, "denied %s\n", egress.HostKey(host))
+	if len(rev.Restored) > 0 {
+		// Your line was widening an entry's, so removing it does not close the
+		// destination — it hands it back. Saying "denied" and stopping there
+		// would describe a lab that cannot reach the host, when it still can.
+		fmt.Fprintf(errOut, "\nNOTE: the destination is still permitted. Your line was widening what an\n"+
+			"      installed entry declares, and taking it out leaves the entry's own:\n")
+		for _, m := range rev.Restored {
+			fmt.Fprintf(errOut, "        %-38s (the %s entry)\n", m.Line.Text, m.Entry)
+		}
+		fmt.Fprintf(errOut, "      `sal providers remove %s` is what closes it entirely.\n", rev.Restored[0].Entry)
+	}
 	fmt.Fprintf(errOut, "Run `sal up` to restart the lab against it — the proxy reads the allowlist at\n"+
 		"startup, so a running lab is still permitting it.\n")
 	return nil

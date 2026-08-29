@@ -60,6 +60,78 @@ stderr 'sal providers remove widget'
 exec sal allowlist list
 stdout '^  api\.widget\.example'
 
+# --------------------------------------------------- widening what an entry seeded
+#
+# Issue #50. An entry seeds `api.widget.example GET,POST`; the operator needs a
+# DELETE. sal used to write that line ABOVE the entry's block, report the
+# destination permitted with the methods asked for, and leave the proxy
+# enforcing the entry's line — because it loads the file into
+# `entries[domain] = methods` and keeps the LAST one. So the operator's lines go
+# last, and the displaced rule is named rather than left to be discovered as a
+# refused request.
+exec sal allowlist allow api.widget.example GET,POST,DELETE
+stderr 'permitted api\.widget\.example GET,POST,DELETE'
+stderr 'already permitted by an installed entry'
+stderr 'api\.widget\.example\s+GET,POST\s+\(the widget entry\)'
+stderr 'keeps the LAST line'
+
+# And the listing says which of the two is real, which is the half that stops
+# the silent case recurring: both lines are in the file and both are printed.
+exec sal allowlist list
+stdout 'api\.widget\.example\s+GET,POST\s+<- overridden by your line below'
+stdout '^yours$'
+stderr 'permitted by the LAST of them'
+
+# What sal writes NEXT must not get back in front of it. Every block goes above
+# the operator's lines, so this reset — and `providers add` and `upgrade`, which
+# write through the same function — cannot undo what was just granted. Fixing
+# only `allow` would have left the entry back on top at the next install.
+exec sal allowlist reset --stack-dir $FIXTURES/local-stack
+exec sal allowlist list
+stdout 'api\.widget\.example\s+GET,POST\s+<- overridden by your line below'
+
+# Denying it is the counterpart, and it does not close the destination — it
+# hands it back to the entry. Saying only "denied" would describe a lab that
+# cannot reach the host, when it still can.
+exec sal allowlist deny api.widget.example
+stderr 'denied api\.widget\.example'
+stderr 'still permitted'
+stderr 'the widget entry'
+stderr 'sal providers remove widget'
+
+# With yours gone, the entry owns it again and the refusal is back.
+! exec sal allowlist deny api.widget.example
+stderr 'permitted by the widget entry, not by you'
+
+# ------------------------------------------------- a lab that predates the fix
+#
+# The other half of #50, and the half every existing lab is in: the operator's
+# line was written ABOVE the entry's block by an older sal, so the entry's line
+# comes last and the operator's is inert. Nothing has run `allow` yet, so
+# nothing has moved it — this is the state someone is IN when they go looking
+# for why a DELETE is refused.
+#
+# The listing has to say so. Marking only the case `allow` has already repaired
+# would describe labs that are working and stay silent about the ones that are
+# not, which is the silent grant #50 is about, one step earlier.
+cp $WORK/legacy $WORK/.config/secure-agent-lab/labs/project-lab/allowlist
+exec sal allowlist list
+stdout 'api\.widget\.example\s+GET,POST,DELETE\s+<- overridden by the widget entry below'
+stderr 'permitted by the LAST of them'
+
+# And re-running the command that granted it is what repairs the lab, which is
+# why `allow` moves the line rather than reporting it already permitted: the
+# text is identical, so an idempotence check on the text alone would answer
+# "nothing to do" to the one lab that needs something done.
+exec sal allowlist allow api.widget.example GET,POST,DELETE
+stderr 'moved your api\.widget\.example line below every managed block'
+stderr 'not what the proxy was enforcing'
+
+# Now the entry's line is the dead one, and the marking has swapped sides.
+exec sal allowlist list
+stdout 'api\.widget\.example\s+GET,POST\s+<- overridden by your line below'
+! stdout 'GET,POST,DELETE\s+<- overridden'
+
 # ------------------------------------------------------------------- reset
 #
 # The command with a job nothing else has: a lab edited into a state nobody can
@@ -127,6 +199,13 @@ name: bare-lab
   "base_addons": [],
   "installed": []
 }
+-- legacy --
+# my own policy, written by a sal that put it above the blocks
+api.widget.example      GET,POST,DELETE
+
+# --- sal:widget --- managed; `sal providers remove widget` removes it
+api.widget.example        GET,POST
+# --- end sal:widget ---
 -- mangled --
 # my own policy
 mine.test               GET
