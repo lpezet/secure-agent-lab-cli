@@ -75,6 +75,64 @@ exec sal up
 stderr 'restarted proxy'
 ! stderr 'restarted proxy, '
 
+# ------------------------------------------------------------- --build
+#
+# The build is its own compose call now, not a flag on the `up`. It has to be,
+# because `up` has no --build-arg and the declarative route (`args:` on the lab
+# service) lives in a file sal fetches verbatim and `sal upgrade` rewrites.
+# One path for both flags: `--build` and `--build-arg` differing in what they
+# build is a distinction nobody would expect to exist.
+rm $WORK/calls.log
+env FAKE_DOCKER_RUNNING=
+exec sal up --build
+stdout 'compose build'
+! stdout 'up -d --wait --build'
+
+# ---------------------------------------------------------- --build-arg
+#
+# Repeatable, passed through in the order given and unaltered — a build arg's
+# value is the operator's text and sal has no business interpreting it.
+rm $WORK/calls.log
+exec sal up --build-arg CLAUDE_VERSION=1.2.3 --build-arg TZ=Europe/Paris
+stdout 'compose build --build-arg CLAUDE_VERSION=1.2.3 --build-arg TZ=Europe/Paris'
+
+# It implies --build. The alternative is an argument accepted for a build that
+# never runs, which is a value silently not applied — the exact failure the
+# flag exists to end.
+grep '^build ' $WORK/calls.log
+
+# The bare form, which compose resolves from sal's own environment. It is what
+# makes `CLAUDE_VERSION=$(curl ...) sal up --build-arg CLAUDE_VERSION` read the
+# way it looks like it reads.
+rm $WORK/calls.log
+exec sal up --build-arg CLAUDE_VERSION
+stdout 'compose build --build-arg CLAUDE_VERSION'
+
+# A value is NOT a place for a credential, and the help says so rather than
+# leaving it to be discovered: an ARG's value is in the image's build history.
+exec sal up --help
+stdout 'docker history'
+stdout 'sal secrets set'
+
+# A key that is not a key is refused before anything runs, rather than handed
+# to compose to reject halfway through.
+rm $WORK/calls.log
+! exec sal up --build-arg =1.2.3
+stderr 'expected KEY=VALUE'
+! exists $WORK/calls.log
+
+# ------------------------------------------------- a build that fails
+#
+# It runs BEFORE the restart, so a lab that was up and healthy is still up and
+# healthy. Restarting first and then failing to build would bounce every
+# service in the deployment for a command that accomplished nothing.
+env FAKE_DOCKER_RUNNING='broker proxy'
+env FAKE_DOCKER_FAIL_VERB=build
+! exec sal up --build-arg CLAUDE_VERSION=1.2.3
+! grep '^restart ' $WORK/calls.log
+! grep '^up ' $WORK/calls.log
+env FAKE_DOCKER_FAIL_VERB=
+
 -- project/.sal/lab.json --
 {"schema_version": 1, "name": "demo-lab", "stack_tag": "v1.13.1"}
 -- .config/secure-agent-lab/labs/demo-lab/compose.yaml --
