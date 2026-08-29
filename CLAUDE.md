@@ -445,6 +445,47 @@ taking an open browser tab and any running `sal observer tail` with it. All of
 it is measured in `tests/compose/run.sh` rather than assumed, including the
 premise: that `up` does not re-read a changed mounted file.
 
+**`--build-arg` is a SEPARATE `docker compose build`, and the declarative
+route is closed.** `lab/Dockerfile` is the operator's file, `ARG` is how a
+Dockerfile is normally parameterised, and until now there was no way to give
+one a value: compose reads the environment for `${...}` interpolation and for
+valueless `environment:` entries, both of which are runtime, so
+`CLAUDE_VERSION=1.2.3 sal up --build` built with the Dockerfile's default and
+said nothing.
+
+The idiomatic fix is `args:` on the lab service, and it is not available here.
+`compose.yaml` is fetched verbatim, `sal drift` compares it against a fresh
+render so a local edit is a finding, and `sal upgrade` rewrites it so the edit
+does not survive — and it would mean the stack's template naming variables that
+belong to somebody else's Dockerfile. What makes this implementable on this
+side alone is that `docker compose build --build-arg` needs **no `args:`
+declared at all**, which `tests/compose/run.sh` pins alongside the other half:
+that the environment does not reach a build arg. So `up --build` became
+`build` then `up -d --wait`, for `--build` as well as for `--build-arg` — the
+two differing in what they build is a distinction nobody would expect to exist.
+
+It runs before the restart, where `up` ran after it, and the reason inverts:
+`restart` goes first so `--wait` waits for health, and the build goes first so
+a build that FAILS leaves a healthy lab exactly as it was rather than having
+bounced every service for a command that accomplished nothing. `--build-arg`
+implies `--build`, because an argument accepted for a build that does not
+happen is a value silently not applied.
+
+**And it must not become a second credential channel**, which is the one line
+where a convenience flag on a security tool could quietly grow into something
+much worse. An `ARG`'s value is recorded in the image's build history and reads
+back out of `docker history`. That is why the help text says so rather than
+leaving it to be discovered: a credential's path is `sal secrets set`, a `0600`
+file the broker reads and the lab never sees. Not the same rule as "never take
+a credential value as an argv" — a build arg is meant to be baked into an image
+and sal cannot tell a version string from a token — so the answer is what the
+help says, not a shape check, which would be per-vendor knowledge besides.
+
+The flag is one-shot on purpose, for now. A declared list would stop the args
+being retyped on every rebuild, but the `.env` route needs `args:` in
+`compose.yaml` and so lands back in the stack repo. Worth revisiting if
+forgetting them turns out to bite.
+
 **The compose project name is passed with `-p` on every invocation**, and
 written to `.env` as `COMPOSE_PROJECT_NAME` as well. The template hardcodes
 `name: secure-agent-lab`, which is right for a deployment somebody copies by

@@ -13,10 +13,14 @@
 #   - `port` is how `sal observer open` gets a URL, and its failure shape when
 #     nothing is running is what that command turns into a sentence.
 #   - `ps --quiet SERVICE` is how `sal open` decides the lab is up.
+#   - `build --build-arg` with no `args:` in the file is what `sal up
+#     --build-arg` is, and the environment reaching a build arg is what it is
+#     not.
 #
 # The lab's own images are NOT built here: this is about compose's semantics,
-# not about the stack. A tiny image and two services are enough, and keep the
-# tier fast enough to run on every change.
+# not about the stack. Two busybox services, plus a two-line Dockerfile for the
+# build-arg section, are enough — and keep the tier fast enough to run on every
+# change.
 #
 # Exit codes: 0 pass · 1 a behaviour is not what sal assumes · 2 cannot run.
 set -uo pipefail
@@ -31,6 +35,7 @@ project="sal-compose-test-$$"
 work=$(mktemp -d "${TMPDIR:-/tmp}/${project}-XXXXXX") || exit 2
 cleanup() {
 	docker compose -p "$project" --profile watcher -f "$work/compose.yaml" down --volumes --remove-orphans >/dev/null 2>&1
+	docker compose -p "$project-build" -f "$work/build.yaml" down --rmi local --remove-orphans >/dev/null 2>&1
 	rm -rf "$work"
 }
 trap cleanup EXIT
@@ -201,6 +206,63 @@ check "naming a service removes it even when its profile is off" \
 out=$(compose ps --quiet worker 2>/dev/null)
 check "removing one service leaves the others running" \
 	"$([ -n "$out" ] && echo 0 || echo 1)"
+
+# ---------------------------------------------------------------- build args
+#
+# Why `sal up --build-arg` is a separate `docker compose build` rather than a
+# flag on the `up`. Three behaviours, and the third is the one that makes this
+# implementable on sal's side at all.
+#
+# The declarative answer — `args:` on the lab service — is not open to us:
+# compose.yaml is fetched verbatim from the stack repo, `sal drift` compares it
+# against a fresh render so a local edit is a finding, and `sal upgrade`
+# rewrites it so the edit does not survive. Adding it there would also mean the
+# stack template naming variables that belong to an operator's own Dockerfile.
+bproject="$project-build"
+mkdir -p "$work/img"
+cat > "$work/img/Dockerfile" <<'DOCKERFILE'
+FROM busybox:latest
+ARG SAL_PROBE=unset
+RUN printf '%s\n' "$SAL_PROBE" > /probe
+DOCKERFILE
+cat > "$work/build.yaml" <<'YAML'
+services:
+  builder:
+    build: ./img
+    command: cat /probe
+YAML
+
+bcompose() { docker compose -p "$bproject" -f "$work/build.yaml" "$@"; }
+# -T because this runs unattended: compose asks for a TTY by default and there
+# is not one in CI.
+probe() { bcompose run --rm -T builder 2>/dev/null | tr -d '\r\n'; }
+
+if ! bcompose build >/dev/null 2>&1; then
+	printf '  cannot build the probe image; is the daemon healthy?\n' >&2
+	exit 2
+fi
+
+# The failure that produced the issue: exporting a variable and rebuilding does
+# nothing. Compose reads the environment for ${...} interpolation in the file
+# and for valueless `environment:` entries, which are RUNTIME. Neither is a
+# build arg, so `CLAUDE_VERSION=$(curl ...) sal up --build` built with the
+# Dockerfile's default and said nothing.
+SAL_PROBE=1.2.3 bcompose build >/dev/null 2>&1
+check "the ambient environment does NOT reach a build arg" \
+	"$([ "$(probe)" = "unset" ] && echo 0 || echo 1)"
+
+# And what sal does instead. Note there is no `args:` in build.yaml above —
+# that is the whole point, because sal cannot put one there.
+bcompose build --build-arg SAL_PROBE=1.2.3 >/dev/null 2>&1
+check "--build-arg KEY=VALUE works with NO args: declared in the file" \
+	"$([ "$(probe)" = "1.2.3" ] && echo 0 || echo 1)"
+
+# The bare form, which is what makes `CLAUDE_VERSION=$(curl ...) sal up
+# --build-arg CLAUDE_VERSION` read the way an operator expects. sal passes the
+# flag through unaltered, so this is compose's behaviour and not sal's.
+SAL_PROBE=9.9.9 bcompose build --build-arg SAL_PROBE >/dev/null 2>&1
+check "a bare --build-arg KEY takes the value from the environment" \
+	"$([ "$(probe)" = "9.9.9" ] && echo 0 || echo 1)"
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

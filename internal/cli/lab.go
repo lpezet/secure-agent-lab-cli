@@ -301,20 +301,52 @@ func copyAddons(srcDir, dstDir string) ([]string, error) {
 }
 
 func newUpCmd() *cobra.Command {
-	var build bool
+	var (
+		build     bool
+		buildArgs []string
+	)
 	cmd := &cobra.Command{
 		Use:   "up",
 		Short: "Start this project's lab",
-		Args:  cobra.NoArgs,
+		Long: "Starts the lab, and restarts whatever was already running: every boundary\n" +
+			"file in a deployment arrives through a bind mount and is read at container\n" +
+			"start, so `up` alone would leave a running container holding what it read\n" +
+			"before.\n" +
+			"\n" +
+			"--build-arg gives an ARG in lab/Dockerfile a value, and implies --build.\n" +
+			"KEY=VALUE sets one; a bare KEY takes it from sal's own environment, so\n" +
+			"`sal up --build-arg TZ` passes through what is already exported.\n" +
+			"\n" +
+			"It is NOT a way to pass a credential. An ARG's value is recorded in the\n" +
+			"image's build history and can be read back by anyone who can run\n" +
+			"`docker history` on it. Credentials go through `sal secrets set`, which\n" +
+			"writes a 0600 file the broker reads and the lab never sees.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runUp(cmd, build)
+			return runUp(cmd, build, buildArgs)
 		},
 	}
 	cmd.Flags().BoolVar(&build, "build", false, "rebuild images before starting")
+	// StringArray rather than StringSlice: a build arg's value is arbitrary
+	// text and splitting it on commas would corrupt one that contains any.
+	cmd.Flags().StringArrayVar(&buildArgs, "build-arg", nil,
+		"KEY=VALUE for lab/Dockerfile, or a bare KEY from the environment (repeatable; implies --build; never a credential)")
 	return cmd
 }
 
-func runUp(cmd *cobra.Command, build bool) error {
+func runUp(cmd *cobra.Command, build bool, buildArgs []string) error {
+	// --build-arg implies --build. The alternative is an argument accepted for
+	// a build that never runs, which is a value silently not applied — the
+	// exact failure the flag exists to end.
+	if len(buildArgs) > 0 {
+		build = true
+	}
+	for _, a := range buildArgs {
+		if k, _, _ := strings.Cut(a, "="); k == "" {
+			return fmt.Errorf("--build-arg %q: expected KEY=VALUE, or a bare KEY to take the value from the environment", a)
+		}
+	}
+
 	l, r, err := runnerFor(cmd)
 	if err != nil {
 		return err
@@ -331,6 +363,24 @@ func runUp(cmd *cobra.Command, build bool) error {
 		return err
 	}
 
+	// The build is its own compose call rather than `up --build`, and it runs
+	// FIRST — before anything is restarted, so a build that fails leaves the
+	// lab exactly as it was instead of having already bounced a healthy one.
+	//
+	// `up` has no --build-arg, and the declarative route is not open to us:
+	// `args:` belongs on the lab service in compose.yaml, which is fetched
+	// verbatim from the stack and rewritten by `sal upgrade`, so an edit there
+	// is drift and does not survive. `docker compose build --build-arg` needs
+	// no `args:` declared at all, which is what makes this implementable with
+	// no stack change. One path for both flags, because `--build` and
+	// `--build-arg --build` differing in what they build is a distinction
+	// nobody would expect to exist.
+	if build {
+		if err := r.Run(cmd.Context(), buildCommand(buildArgs)...); err != nil {
+			return err
+		}
+	}
+
 	// Restarted before `up`, not after, so that `--wait` below waits for them
 	// to come back healthy. `restart` has no --wait of its own, and reporting a
 	// lab up while its proxy is still starting would be the same class of lie
@@ -341,11 +391,7 @@ func runUp(cmd *cobra.Command, build bool) error {
 		}
 	}
 
-	args := []string{"up", "-d", "--wait"}
-	if build {
-		args = append(args, "--build")
-	}
-	if err := r.Run(cmd.Context(), args...); err != nil {
+	if err := r.Run(cmd.Context(), "up", "-d", "--wait"); err != nil {
 		return err
 	}
 
@@ -365,6 +411,20 @@ func runUp(cmd *cobra.Command, build bool) error {
 	}
 	reportFeatures(cmd, l, r)
 	return nil
+}
+
+// buildCommand is the compose invocation `sal up` builds with.
+//
+// Split out for the one thing worth asserting without a daemon: that every
+// --build-arg reaches compose in the order it was given, unmerged and
+// unrewritten. A value is the operator's text and sal has no business
+// interpreting it.
+func buildCommand(buildArgs []string) []string {
+	args := []string{"build"}
+	for _, a := range buildArgs {
+		args = append(args, "--build-arg", a)
+	}
+	return args
 }
 
 func newDownCmd() *cobra.Command {
